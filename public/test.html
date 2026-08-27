@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan Your Visit — Grace Assistant test page</title>
+<style>
+  :root {
+    --navy: #292E38;
+    --orange: #FF5400;
+    --cream: #FAFAF7;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--navy);
+    background: #FFFFFF;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .bar {
+    background: var(--navy);
+    color: var(--cream);
+    padding: 10px 24px;
+    font-size: 12.5px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .bar strong { font-weight: 650; letter-spacing: 0.02em; }
+  .bar a {
+    color: var(--cream);
+    text-decoration: none;
+    border: 1px solid rgba(250, 250, 247, 0.35);
+    border-radius: 4px;
+    padding: 3px 8px;
+  }
+  .bar a:hover { border-color: var(--orange); color: var(--orange); }
+  .bar a.on { background: var(--orange); border-color: var(--orange); color: #fff; }
+
+  header.site {
+    border-bottom: 1px solid rgba(41, 46, 56, 0.12);
+    padding: 20px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; }
+  .logo svg { width: 24px; height: 24px; fill: var(--orange); }
+  nav { display: flex; gap: 20px; font-size: 14px; }
+  nav a { color: rgba(41, 46, 56, 0.72); text-decoration: none; }
+  nav a[aria-current] { color: var(--navy); font-weight: 650; border-bottom: 2px solid var(--orange); }
+
+  .hero { background: var(--cream); padding: 64px 24px; }
+  .inner { max-width: 720px; margin: 0 auto; }
+  .eyebrow {
+    font-size: 12px; font-weight: 650; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--orange); margin-bottom: 12px;
+  }
+  h1 { font-size: 44px; line-height: 1.1; letter-spacing: -0.02em; margin-bottom: 16px; }
+  .lede { font-size: 18px; color: rgba(41, 46, 56, 0.76); }
+
+  main { padding: 48px 24px 140px; }
+  h2 { font-size: 22px; letter-spacing: -0.01em; margin: 36px 0 10px; }
+  p + p { margin-top: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-top: 18px; }
+  .card { border: 1px solid rgba(41, 46, 56, 0.14); border-radius: 4px; padding: 16px; }
+  .card h3 { font-size: 14px; margin-bottom: 4px; }
+  .card p { font-size: 14px; color: rgba(41, 46, 56, 0.72); }
+
+  .note {
+    margin-top: 40px; border-left: 3px solid var(--orange);
+    background: var(--cream); border-radius: 4px; padding: 14px 16px;
+    font-size: 14px; color: rgba(41, 46, 56, 0.78);
+  }
+  .note strong { color: var(--navy); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: rgba(41,46,56,0.07); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <strong>TEST PAGE</strong>
+  <span>simulate route:</span>
+  <a href="?ga-route=/plan-your-visit/" id="r1">/plan-your-visit/</a>
+  <a href="?ga-route=/" id="r2">/ (site default)</a>
+  <a href="?ga-route=/nothing-here/" id="r3">/nothing-here/ (falls back to default)</a>
+</div>
+
+<header class="site">
+  <div class="logo">
+    <svg viewBox="0 0 44 44" aria-hidden="true">
+      <circle cx="22" cy="8" r="4"></circle>
+      <circle cx="12" cy="20" r="4"></circle>
+      <circle cx="22" cy="20" r="4"></circle>
+      <circle cx="32" cy="20" r="4"></circle>
+      <circle cx="22" cy="32" r="4"></circle>
+    </svg>
+    Grace Church
+  </div>
+  <nav>
+    <a href="#">About</a>
+    <a href="#" aria-current="page">Plan Your Visit</a>
+    <a href="#">Ministries</a>
+    <a href="#">Give</a>
+  </nav>
+</header>
+
+<section class="hero">
+  <div class="inner">
+    <div class="eyebrow">Plan Your Visit</div>
+    <h1>Come as you are. Sit wherever you like.</h1>
+    <p class="lede">
+      Visiting a church for the first time can feel like walking into a room where
+      everyone already knows the rules. Here's everything you'd want to know before
+      Sunday — and the orange button in the corner will answer the rest.
+    </p>
+  </div>
+</section>
+
+<main>
+  <div class="inner">
+    <h2>Sunday mornings</h2>
+    <p>
+      Two identical services, 9:00 and 11:00 a.m. Doors and coffee open half an hour
+      early. Plan on about 75 minutes.
+    </p>
+
+    <div class="cards">
+      <div class="card"><h3>Arriving</h3><p>Guest parking is marked in orange by the main doors.</p></div>
+      <div class="card"><h3>Kids</h3><p>Nursery through 5th grade during both services.</p></div>
+      <div class="card"><h3>Wearing</h3><p>Jeans, a dress, whatever you had on already.</p></div>
+    </div>
+
+    <h2>Still have a question?</h2>
+    <p>
+      Tap the orange button in the bottom-right corner. It's tap-only — there's no
+      box to type into, and every answer was written by our team.
+    </p>
+
+    <div class="note">
+      <strong>Testing notes.</strong>
+      This page loads <code>grace-assistant.js</code> with
+      <code>data-route="/plan-your-visit/"</code> so the visit-page starters show up
+      even though the file is served at <code>/test.html</code>. The links in the black
+      bar above override that with <code>?ga-route=</code> so you can check the other
+      routes. On a real site you'd drop in one script tag and let the widget read
+      <code>location.pathname</code> itself.
+    </div>
+  </div>
+</main>
+
+<script src="grace-assistant.js" data-answers="answers.json" data-route="/plan-your-visit/" defer></script>
+<script>
+  // The ?ga-route= override wins over data-route; just highlight which one is live.
+  (function () {
+    var match = /[?&]ga-route=([^&]+)/.exec(location.search);
+    var active = match ? decodeURIComponent(match[1]) : '/plan-your-visit/';
+    Array.prototype.forEach.call(document.querySelectorAll('.bar a'), function (a) {
+      if (a.textContent.trim().split(' ')[0] === active) a.className = 'on';
+    });
+  })();
+</script>
+</body>
+</html>
