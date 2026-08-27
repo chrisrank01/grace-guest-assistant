@@ -7,3 +7,14 @@ secrets/
 *.local
 corpus/
 .DS_Store
+demo-site/
+.venv/
+build/
+*service-account*.json
+__pycache__/
+*.pyc
+.dev.vars*
+.wrangler/
+*.swp
+*.swo
+*~

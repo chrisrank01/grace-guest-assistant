@@ -1,0 +1,3 @@
+name = "grace-assistant-router"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
