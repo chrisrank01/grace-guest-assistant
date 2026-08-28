@@ -57,8 +57,15 @@ jobs:
           exit 1
 
       - name: SIMULATE deploy ping
+        id: simping
         if: inputs.simulate == 'deploy_ping'
-        run: echo "RESULT status=deployed questions=SIMULATED warnings=0 changed=1" | tee "$GITHUB_STEP_SUMMARY"
+        run: |
+          # Must publish the same `result_line` output the real Publish step does,
+          # or the notify step below has nothing to match on and silently skips.
+          LINE="RESULT status=deployed questions=SIMULATED warnings=0 changed=1"
+          echo "$LINE"
+          echo "result_line=$LINE" >> "$GITHUB_OUTPUT"
+          echo "$LINE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Write service-account key to a private temp file
         if: inputs.simulate == 'none' || inputs.simulate == ''
@@ -125,16 +132,23 @@ jobs:
             -d "run ${{ github.run_id }} · $(date -u '+%Y-%m-%d %H:%M UTC') · see Actions log" \
             "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null || true
 
+      # Reads whichever step produced a RESULT line - the real publish, or the
+      # simulation. Matching only on steps.publish meant deploy_ping silently
+      # tested nothing.
       - name: Notify on deploy
-        if: success() && contains(steps.publish.outputs.result_line, 'status=deployed')
+        if: >-
+          success() &&
+          (contains(steps.publish.outputs.result_line, 'status=deployed') ||
+           contains(steps.simping.outputs.result_line, 'status=deployed'))
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RESULT_LINE: ${{ steps.publish.outputs.result_line || steps.simping.outputs.result_line }}
         run: |
           curl -s -m 20 \
             -H "Title: Grace published" \
             -H "Priority: default" \
             -H "Tags: white_check_mark" \
-            -d "${{ steps.publish.outputs.result_line }} · $(date -u '+%H:%M UTC')" \
+            -d "$RESULT_LINE · $(date -u '+%H:%M UTC')" \
             "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null || true
 
       - name: Remove the key
