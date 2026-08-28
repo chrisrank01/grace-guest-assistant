@@ -50,7 +50,7 @@
     "parking": {
       "label": "Where do I park?",
       "answer": [
-        "When you arrive, you'll find parking signs and a volunteer team to guide you. We recommend arriving 20 minutes early to make it easy."
+        "When you arrive, you'll find parking signs and a volunteer team to guide you. We recommend arriving 20 minutes early to make arrival easy."
       ],
       "followups": [
         "what-to-wear",
@@ -173,6 +173,12 @@
       "answer": [
         "Your giving history and year-end statements live in the Grace app under your giving profile — view or download them anytime."
       ],
+      "links": [
+        {
+          "label": "Open the app",
+          "href": "https://churchcenter.com/setup"
+        }
+      ],
       "followups": [
         "how-to-give",
         "recurring-gift",
@@ -186,8 +192,8 @@
       ],
       "links": [
         {
-          "label": "Contact us",
-          "href": "/contact/"
+          "label": "Start a non-cash gift",
+          "href": "https://gcfl.churchcenter.com/people/forms/313017"
         }
       ],
       "followups": [
