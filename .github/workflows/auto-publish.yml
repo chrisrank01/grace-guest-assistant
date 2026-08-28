@@ -1,0 +1,73 @@
+name: auto-publish
+
+# Ships approved Sheet content to the live widget without a human in the loop.
+# The gates are: the Status column (HOLD never ships), publish.py's validator
+# (exit 2 = nothing written), and a quiescence debounce so a half-finished edit
+# cannot go out mid-typing.
+
+on:
+  schedule:
+    # Every two hours at :17 - offset off the hour so it does not collide with
+    # the crowd of :00 cron jobs on GitHub's shared runners.
+    - cron: '17 */2 * * *'
+  workflow_dispatch:        # manual "Run workflow" button
+
+concurrency:
+  group: auto-publish
+  cancel-in-progress: false  # queue runs; never let two deploys overlap
+
+permissions:
+  contents: write            # to commit the regenerated answers.json
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python deps
+        run: pip install --quiet gspread google-auth
+
+      - name: Install wrangler
+        run: npm install --no-save wrangler@4
+
+      - name: Write service-account key to a private temp file
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          # Written outside the workspace so it can never be picked up by a
+          # later `git add`. umask first so it is never briefly world-readable.
+          umask 077
+          KEY_FILE="$RUNNER_TEMP/grace-publisher.json"
+          printf '%s' "$GCP_SA_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          echo "GRACE_PUBLISHER_KEY=$KEY_FILE" >> "$GITHUB_ENV"
+          # Never echo the key, its length, or any prefix of it.
+          echo "key written to \$RUNNER_TEMP (contents not logged)"
+
+      - name: Publish
+        env:
+          GRACE_PUBLISHER_KEY: ${{ env.GRACE_PUBLISHER_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PATH: ${{ github.workspace }}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+        run: python publish.py --deploy --min-quiet-minutes 30 --quiet
+
+      - name: Commit regenerated answers.json if it changed
+        run: |
+          if git diff --quiet -- public/answers.json; then
+            echo "no content change - nothing to commit"
+            exit 0
+          fi
+          git config user.name  "grace-auto-publish"
+          git config user.email "actions@users.noreply.github.com"
+          git add public/answers.json
+          git commit -m "auto-publish: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push
+
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/grace-publisher.json"

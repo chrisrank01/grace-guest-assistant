@@ -43,13 +43,14 @@ SHIP_STATUSES = {'DRAFT', 'APPROVED'}
 
 # Widget chrome that is not page-specific. Mirrors what is deployed today.
 GLOBAL_META = {
-    'title': 'GraceGuide',
-    'launcherLabel': 'Have a question? Tap here',
+    'title': 'Grace',
+    'subtitle': 'Guest Assistant',
+    'launcherLabel': 'Ask Grace',
     'startersLabel': 'Common questions',
-    'followupsLabel': 'People also ask',
-    'footerHint': 'Tap a question to see the answer.',
+    'followupsLabel': 'WOULD YOU ALSO LIKE TO KNOW',
+    'footerHint': 'Tap a question — no typing needed',
     'restartLabel': 'Start over',
-    'homeLabel': 'Back to the main questions',
+    'homeLabel': '← Back',
 }
 
 # Per-route overrides. The PLACEMENT tab has no columns for these today, so
@@ -82,7 +83,12 @@ COL_STATUS = 'Status'
 COL_FOLLOWUPS = 'Follow-up IDs (slugs)'
 
 HEADER_ROW = 4          # 1-indexed; data starts at row 5
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets.readonly',
+    # Needed only for the quiescence debounce (Drive file modifiedTime).
+    # Requires the Drive API to be enabled on the GCP project as well.
+    'https://www.googleapis.com/auth/drive.metadata.readonly',
+]
 OUT_BUILD = 'build/answers.json'
 OUT_PUBLIC = 'public/answers.json'
 PAGES_PROJECT = 'grace-assistant'
@@ -90,6 +96,19 @@ LIVE_URL = 'https://grace-assistant.pages.dev/grace-assistant.js'
 LIVE_JSON = 'https://grace-assistant.pages.dev/answers.json'
 
 WARNINGS = []
+QUIET = False
+
+
+def say(msg):
+    """Chatter - suppressed under --quiet."""
+    if not QUIET:
+        print(msg)
+
+
+def result(**fields):
+    """One machine-readable summary line, always printed. Never contains
+    credential material - only counts, statuses and content-derived values."""
+    print('RESULT ' + ' '.join(f'{k}={v}' for k, v in fields.items()))
 
 
 def warn(msg):
@@ -107,6 +126,28 @@ def die(problems):
 # ---------------------------------------------------------------------------
 # READ
 # ---------------------------------------------------------------------------
+
+def sheet_modified_minutes_ago():
+    """Minutes since the corpus Sheet was last edited, via the Drive API.
+
+    Raises on any failure - an unattended publisher that cannot establish
+    quiescence must fail loudly rather than guess and ship a half-finished edit.
+    """
+    import urllib.request
+    from google.oauth2.service_account import Credentials
+    import google.auth.transport.requests as gtr
+
+    creds = Credentials.from_service_account_file(KEY_PATH, scopes=SCOPES)
+    creds.refresh(gtr.Request())
+    url = (f'https://www.googleapis.com/drive/v3/files/{SHEET_KEY}'
+           '?fields=modifiedTime&supportsAllDrives=true')
+    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + creds.token})
+    body = json.load(urllib.request.urlopen(req, timeout=30))
+    stamp = body['modifiedTime'].replace('Z', '+00:00')
+    edited = datetime.datetime.fromisoformat(stamp)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return (now - edited).total_seconds() / 60.0
+
 
 def open_sheet():
     import gspread
@@ -152,9 +193,9 @@ def read_placement(sh):
             'intro': (row.get(col_intro) or '').strip() or fallback.get('intro'),
         }
     if col_title or col_launch or col_intro:
-        print('  PLACEMENT supplies route meta columns; Sheet values win over fallback')
+        say('  PLACEMENT supplies route meta columns; Sheet values win over fallback')
     else:
-        print('  PLACEMENT has no route-meta columns; using ROUTE_META_FALLBACK')
+        say('  PLACEMENT has no route-meta columns; using ROUTE_META_FALLBACK')
     return routes
 
 
@@ -162,26 +203,35 @@ def read_placement(sh):
 # TRANSFORM
 # ---------------------------------------------------------------------------
 
-def parse_link(raw, slug):
-    """'Label -> /path' -> {label, href}, or None (with a warning) if the
-    destination is prose rather than somewhere a browser can go."""
-    raw = (raw or '').strip()
-    if not raw:
+def parse_one_link(seg, slug):
+    """One 'Label -> destination' segment -> {label, href}, or None (with a
+    warning) if the destination is prose rather than somewhere a browser can go."""
+    seg = seg.strip()
+    if not seg:
         return None
-    if slug == TALK_PERSON_SLUG:                      # 'Call 407-418-1300'
-        digits = re.sub(r'\D', '', raw)
-        if len(digits) == 10:
-            return {'label': raw, 'href': f'tel:+1{digits}'}
-        warn(f'{slug}: phone link not parseable from {raw!r} - link dropped')
+    if '→' not in seg:
+        # A bare 'Call NNN-NNN-NNNN' is the one destination-less form we accept.
+        digits = re.sub(r'\D', '', seg)
+        if seg.lower().startswith('call') and len(digits) == 10:
+            return {'label': seg, 'href': f'tel:+1{digits}'}
+        warn(f'{slug}: link {seg!r} has no destination - link dropped')
         return None
-    if '→' not in raw:
-        warn(f'{slug}: link {raw!r} has no destination - link dropped')
-        return None
-    label, dest = (p.strip() for p in raw.split('→', 1))
+    label, dest = (p.strip() for p in seg.split('→', 1))
     if dest.startswith('/') or re.match(r'^https?://', dest) or dest.startswith('tel:'):
         return {'label': label, 'href': dest}
     warn(f'{slug}: destination {dest!r} is not a path/URL/tel - link dropped')
     return None
+
+
+def parse_links(raw, slug):
+    """A Primary Action cell -> list of links. Multiple actions are separated by
+    ' | '; the first is the primary and renders as the orange button. A cell with
+    no separator behaves exactly as a single-link cell always has."""
+    raw = (raw or '').strip()
+    if not raw:
+        return []
+    segments = [seg for seg in raw.split(' | ')] if ' | ' in raw else [raw]
+    return [link for link in (parse_one_link(seg, slug) for seg in segments) if link]
 
 
 def build(sh):
@@ -191,7 +241,7 @@ def build(sh):
 
     # Page -> route path, derived from PLACEMENT rather than hardcoded names
     page_to_route = {cfg['page']: path for path, cfg in routes_cfg.items()}
-    print(f'  pilot pages from PLACEMENT: {page_to_route}')
+    say(f'  pilot pages from PLACEMENT: {page_to_route}')
 
     _, rows = tabulate(sh.worksheet('ANSWERS').get_all_values())
 
@@ -218,9 +268,9 @@ def build(sh):
         if status == 'DRAFT':
             drafts += 1
         entry = {'label': question, 'answer': [p.strip() for p in answer.split('\n\n') if p.strip()]}
-        link = parse_link(row.get(COL_LINK, ''), slug)
-        if link:
-            entry['links'] = [link]
+        links = parse_links(row.get(COL_LINK, ''), slug)
+        if links:
+            entry['links'] = links
         entry['_followups_raw'] = [s.strip() for s in row.get(COL_FOLLOWUPS, '').split(',') if s.strip()]
         questions[slug] = entry
         by_id[rid] = slug
@@ -229,19 +279,16 @@ def build(sh):
         if page in page_to_route:
             page_slugs.setdefault(page_to_route[page], set()).add(slug)
 
-    print(f'  in scope: {len(questions)} questions   out of scope: {skipped} rows')
+    say(f'  in scope: {len(questions)} questions   out of scope: {skipped} rows')
     if drafts:
         warn(f'{drafts} DRAFT row(s) shipped - SHIP_STATUSES currently allows DRAFT')
 
-    # followups: sheet order, then talk-person appended everywhere but itself
+    # followups are pure Sheet content now. talk-person is a pinned action in the
+    # widget, not a chip, so it is never appended here; if a Sheet cell still
+    # lists it we drop it, and the widget filters it too during the transition.
     for slug, entry in questions.items():
-        fus = [f for f in entry.pop('_followups_raw')]
-        if slug != TALK_PERSON_SLUG:
-            if TALK_PERSON_SLUG not in fus:
-                fus.append(TALK_PERSON_SLUG)
-        else:
-            fus = []
-        entry['followups'] = fus
+        fus = [f for f in entry.pop('_followups_raw') if f != TALK_PERSON_SLUG]
+        entry['followups'] = [] if slug == TALK_PERSON_SLUG else fus
 
     routes = {}
     for path, cfg in routes_cfg.items():
@@ -323,8 +370,8 @@ def validate(doc, page_slugs):
         reached = seen - {TALK_PERSON_SLUG}      # ships on every page by design
         unreached = expected - reached
         unexpected = reached - expected
-        print(f'  BFS {path}: expected {len(expected)} from Page column, '
-              f'reached {len(reached)} -> {sorted(reached)}')
+        say(f'  BFS {path}: expected {len(expected)} from Page column, '
+            f'reached {len(reached)} -> {sorted(reached)}')
         if unreached:
             problems.append(f'{path}: questions on this page unreachable from its '
                             f'starters: {sorted(unreached)}')
@@ -334,7 +381,7 @@ def validate(doc, page_slugs):
 
     if problems:
         die(problems)
-    print('  validation: PASS')
+    say('  validation: PASS')
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +403,7 @@ def unified(old_path, new_path):
 
 def semantic(old_path, new_doc):
     if not os.path.exists(old_path):
-        print('  (no current public/answers.json to compare)')
+        say('  (no current public/answers.json to compare)')
         return
     old = json.load(open(old_path, encoding='utf-8'))
     oq, nq = old.get('questions', {}), new_doc['questions']
@@ -388,11 +435,11 @@ def semantic(old_path, new_doc):
 def deploy():
     import shutil
     shutil.copyfile(OUT_BUILD, OUT_PUBLIC)
-    print(f'  copied {OUT_BUILD} -> {OUT_PUBLIC}')
+    say(f'  copied {OUT_BUILD} -> {OUT_PUBLIC}')
     subprocess.run(['npx', 'wrangler', 'pages', 'deploy', 'public',
                     '--project-name', PAGES_PROJECT, '--branch', 'main'], check=True)
     local = hashlib.md5(open(OUT_PUBLIC, 'rb').read()).hexdigest()
-    print(f'  local md5 {local}')
+    say(f'  local md5 {local}')
     # Cloudflare 403s urllib's default User-Agent, so shell out to curl - which
     # is also what we verify by hand. Two checks: the edge can serve a stale copy
     # for a beat after a deploy, and one probe has given a false negative before.
@@ -403,36 +450,72 @@ def deploy():
                               capture_output=True).stdout
         live = hashlib.md5(body).hexdigest()
         text = body.decode('utf-8', 'replace')
-        print(f'  live md5 check {attempt}: {live}  match={live == local}')
-        print(f"     'GraceGuide' present: {'GraceGuide' in text}")
+        say(f'  live md5 check {attempt}: {live}  match={live == local}')
+        say(f"     panel title present: {'Grace' in text}")
 
 
 def main():
+    global QUIET
     ap = argparse.ArgumentParser()
     ap.add_argument('--deploy', action='store_true',
                     help='copy to public/ and ship (default is dry run)')
+    ap.add_argument('--min-quiet-minutes', type=int, default=0, metavar='N',
+                    help='skip the run if the Sheet was edited less than N minutes '
+                         'ago, so a half-finished edit never ships')
+    ap.add_argument('--quiet', action='store_true',
+                    help='machine-readable summary lines only')
     args = ap.parse_args()
+    QUIET = args.quiet
 
-    print('reading Sheet...')
+    if args.min_quiet_minutes > 0:
+        try:
+            idle = sheet_modified_minutes_ago()
+        except Exception as exc:
+            # Never print the exception body verbatim - Google error payloads can
+            # echo request context. Type name only.
+            print(f'ERROR could not read Sheet modifiedTime ({type(exc).__name__}) - '
+                  'Drive API enabled? drive.metadata.readonly scope granted?')
+            result(status='quiescence_check_failed')
+            sys.exit(3)
+        if idle < args.min_quiet_minutes:
+            say(f'Sheet edited {idle:.0f}m ago - debounce, skipping')
+            result(status='debounced', idle_minutes=round(idle),
+                   threshold_minutes=args.min_quiet_minutes)
+            sys.exit(0)
+        say(f'Sheet last edited {idle:.0f}m ago - past the {args.min_quiet_minutes}m '
+            'debounce, proceeding')
+
+    say('reading Sheet...')
     doc, page_slugs = build(open_sheet())
-    print('validating...')
+    say('validating...')
     validate(doc, page_slugs)
     dump(doc, OUT_BUILD)
-    print(f'wrote {OUT_BUILD}')
+    say(f'wrote {OUT_BUILD}')
 
-    print('\n=== UNIFIED DIFF vs public/answers.json ===')
     diff = unified(OUT_PUBLIC, OUT_BUILD)
-    print(''.join(diff) if diff else '  (identical)')
+    say('\n=== UNIFIED DIFF vs public/answers.json ===')
+    say(''.join(diff) if diff else '  (identical)')
+    say('=== SEMANTIC DIFF (per question) ===')
+    if not QUIET:
+        semantic(OUT_PUBLIC, doc)
+    say(f'\nwarnings: {len(WARNINGS)}')
 
-    print('=== SEMANTIC DIFF (per question) ===')
-    semantic(OUT_PUBLIC, doc)
+    if not diff:
+        result(status='nochange', questions=len(doc['questions']),
+               warnings=len(WARNINGS))
+        if not args.deploy:
+            say('\ndry run - public/ untouched, nothing deployed.')
+        return
 
-    print(f'\nwarnings: {len(WARNINGS)}')
     if args.deploy:
-        print('\n=== DEPLOYING ===')
+        say('\n=== DEPLOYING ===')
         deploy()
+        result(status='deployed', questions=len(doc['questions']),
+               warnings=len(WARNINGS), changed=1)
     else:
-        print('\ndry run - public/ untouched, nothing deployed. Use --deploy to ship.')
+        result(status='would_change', questions=len(doc['questions']),
+               warnings=len(WARNINGS), changed=1)
+        say('\ndry run - public/ untouched, nothing deployed. Use --deploy to ship.')
 
 
 if __name__ == '__main__':

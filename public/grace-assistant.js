@@ -34,6 +34,30 @@
   var RADIUS = '4px';
 
   var HOME_ID = '__home';
+  var TALK_PERSON_ID = 'talk-person';
+
+  /* Grace registers these families document-wide (useanyfont + Typekit).
+     Naming them here lights the widget up on discovergrace.com and the demo
+     clones; everywhere else the fallbacks carry it. No font files shipped.
+     'greyclif-regular' is spelled with one f in Grace's own CSS - verbatim. */
+  /* Font pinning. Grace registers five faces via useanyfont; ONE of them is a
+     trial cut - 4619Greycliff-CF.woff2 reports family 'FSP DEMO - Greycliff CF'
+     and stamps a watermark glyph on the apostrophe. That file is the one served
+     as CSS family 'greycliff-cf', so the widget must never name it. Verified
+     clean, by file:
+       3382Greyclif-Regular.woff2  Greycliff CF Regular     400  -> 'greyclif-regular'
+       8171Greycliff-Demi.woff2    Greycliff CF Demi Bold   600  -> 'greycliff-demi'
+       2430Greycliff-Bold.woff2    Greycliff CF Bold        700  -> 'greycliff-bold'
+       3135Quincy-Black.woff2      Quincy CF Black          900  -> 'quincy-black'
+     Each @font-face omits a font-weight descriptor, so every family is a
+     weight-400 face and 'greycliff-bold' is a separate FAMILY, not a weight.
+     Emphasis therefore switches family rather than raising font-weight, and
+     stays at 500 so browsers do not synthesise bold on top of an already-bold
+     file. Off Grace's site all of these fall through to the system stack. */
+  var SYSTEM = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+  var SERIF  = "'quincy-black', Georgia, 'Times New Roman', serif";
+  var SANS   = "'greyclif-regular', " + SYSTEM;
+  var SANS_MED = "'greycliff-demi', 'greycliff-bold', 'greyclif-regular', " + SYSTEM;
 
   /* ------------------------------------------------------------------ */
   /* Route handling                                                      */
@@ -93,28 +117,63 @@
     '*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }',
 
     '.wrap {',
-    '  position: fixed; right: 20px; bottom: 20px; z-index: 2147483000;',
+    /* env() only resolves non-zero when the HOST page's viewport meta carries
+       viewport-fit=cover. discovergrace.com does not, so these insets are 0
+       there today and the literal offsets are what actually apply. They are
+       kept so the widget becomes correct the moment that meta is fixed. */
+    '  position: fixed;',
+    '  right: calc(20px + env(safe-area-inset-right, 0px));',
+    '  bottom: calc(20px + env(safe-area-inset-bottom, 0px));',
+    '  z-index: 2147483000;',
     '  display: flex; flex-direction: column; align-items: flex-end; gap: 12px;',
-    '  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;',
+    '  font-family: ' + SANS + ';',
     '  color: ' + NAVY + '; font-size: 15px; line-height: 1.5;',
     '  -webkit-font-smoothing: antialiased;',
     '}',
 
     /* ---- launcher ---- */
+    /* Brand guide p.5: the monogram never appears without identifying copy, so
+       the launcher is a lockup - white label pill plus the orange bug. */
+    /* The wrapper is a positioning device only - no fill, no border, no radius,
+       no shadow, no outline. Every visible state lives on .launcher-pill and
+       .launcher-bug. (The old single-button launcher's chrome used to live here
+       and was inherited by the new lockup, which is what drew the box.) */
     '.launcher {',
-    '  width: 60px; height: 60px; border: 0; border-radius: 50%;',
-    '  background: ' + ORANGE + '; color: #FFFFFF; cursor: pointer;',
-    '  display: flex; align-items: center; justify-content: center;',
-    '  box-shadow: 0 6px 20px rgba(41, 46, 56, 0.28);',
-    '  transition: transform 140ms ease, box-shadow 140ms ease;',
+    '  border: 0; background: none; padding: 0; margin: 0;',
+    '  border-radius: 0; box-shadow: none; outline: none;',
+    '  -webkit-appearance: none; appearance: none;',
+    '  cursor: pointer; display: flex; align-items: center; gap: 10px;',
     '  flex: none; -webkit-tap-highlight-color: transparent;',
     '}',
-    '.launcher:active { transform: translateY(0); }',
-    '.launcher:focus-visible { outline: 3px solid ' + NAVY + '; outline-offset: 3px; }',
-    '.launcher svg { width: 30px; height: 30px; fill: #FFFFFF; }',
+    '.launcher-pill {',
+    '  background: #FFFFFF; color: ' + NAVY + '; border-radius: 999px;',
+    '  font-family: ' + SANS_MED + '; padding: 9px 16px; font-size: 11px; font-weight: 500;',
+    '  letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap;',
+    '  box-shadow: 0 2px 8px rgba(41, 46, 56, 0.15);',
+    '}',
+    '.launcher-bug {',
+    '  width: 60px; height: 60px; border-radius: 50%; flex: none;',
+    '  background: ' + ORANGE + '; color: #FFFFFF;',
+    '  display: flex; align-items: center; justify-content: center;',
+    '  box-shadow: 0 6px 20px rgba(41, 46, 56, 0.28);',
+    '  transition: box-shadow 140ms ease;',
+    '}',
+    '.launcher:focus { outline: none; }',
+    '.launcher:focus-visible { outline: none; }',
+    /* states attach to the two visible pieces, never the wrapper */
+    '.launcher-pill, .launcher-bug { transition: transform 140ms ease, box-shadow 140ms ease; }',
+    '.launcher:active .launcher-bug { transform: translateY(1px); }',
+    '.launcher:active .launcher-pill { transform: translateY(1px); }',
+    '.launcher:focus-visible .launcher-bug { outline: 3px solid ' + NAVY + '; outline-offset: 3px; }',
+    '.launcher:focus-visible .launcher-pill { outline: 2px solid ' + NAVY + '; outline-offset: 2px; }',
+    '.launcher-bug svg { width: 30px; height: 30px; fill: #FFFFFF; }',
     '.launcher .icon-close { width: 24px; height: 24px; }',
 
     /* ---- panel ---- */
+    /* Four stacked, non-overlapping children: head / scroll / pinned / foot.
+       Only .scroll flexes; the other three are flex: none. min-height: 0 on the
+       scroll body is what lets it shrink below its content on iOS - without it a
+       flex child refuses to shrink and the body never scrolls. */
     '.panel {',
     '  display: none; flex-direction: column; overflow: hidden;',
     '  width: 372px; max-width: calc(100vw - 32px);',
@@ -138,10 +197,16 @@
     '.mark { width: 22px; height: 22px; flex: none; }',
     '.mark svg { width: 22px; height: 22px; fill: ' + ORANGE + '; display: block; }',
     '.head-text { flex: 1 1 auto; min-width: 0; }',
-    '.head-title { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }',
-    '.head-sub { font-size: 12px; color: rgba(41, 46, 56, 0.62); margin-top: 1px; }',
+    '.head-title { font-family: ' + SERIF + '; font-size: 21px; line-height: 1;',
+    '  font-weight: 400; letter-spacing: 0; }',
+    '.head-sub { font-family: ' + SANS_MED + '; font-size: 9.5px; font-weight: 500;',
+    '  letter-spacing: 0.14em;',
+    '  text-transform: uppercase; color: rgba(41, 46, 56, 0.55); margin-top: 3px; }',
+    /* route title, now a body heading above the intro */
+    '.route-heading { font-family: ' + SERIF + '; font-size: 24px; line-height: 1.15;',
+    '  font-weight: 400; color: ' + NAVY + '; padding: 2px 2px 2px; }',
     '.close {',
-    '  flex: none; width: 30px; height: 30px; border: 0; border-radius: ' + RADIUS + ';',
+    '  flex: none; width: 44px; height: 44px; border: 0; border-radius: ' + RADIUS + ';',
     '  background: transparent; color: ' + NAVY + '; cursor: pointer;',
     '  display: flex; align-items: center; justify-content: center;',
     '  -webkit-tap-highlight-color: transparent;',
@@ -151,10 +216,32 @@
     '.close svg { width: 18px; height: 18px; }',
 
     /* ---- feed ---- */
+    /* ONE scroll region: route heading + transcript + section label + chips all
+       live inside .scroll. Header is fixed above it, pinned row and footer below.
+       Nothing inside has its own overflow, so nothing can clip. */
+    '.scroll {',
+    '  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;',
+    '  scrollbar-width: thin; scrollbar-color: rgba(41, 46, 56, 0.28) transparent;',
+    /* Cosmetic breathing room only. The pinned row and footer are flex siblings
+       below this box, not an overlay, so nothing here needs to clear them. */
+    '  padding-bottom: 16px;',
+    /* Bottom-edge fade signalling "there is more below". A mask on the scroll box
+       itself - no extra element, no positioned ancestor, no layout shift. The
+       fade sits at the box's bottom edge, which is exactly above the pinned row.
+       Removed once there is nothing left to scroll to. */
+    '  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);',
+    '  mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);',
+    '}',
+    '.scroll.at-end { -webkit-mask-image: none; mask-image: none; }',
+    '.scroll::-webkit-scrollbar { width: 6px; }',
+    '.scroll::-webkit-scrollbar-track { background: transparent; }',
+    '.scroll::-webkit-scrollbar-thumb {',
+    '  background: rgba(41, 46, 56, 0.28); border-radius: 999px;',
+    '}',
+    '.scroll::-webkit-scrollbar-thumb:hover { background: rgba(41, 46, 56, 0.42); }',
     '.feed {',
-    '  flex: 1 1 auto; min-height: 0; overflow-y: auto;',
+    '  flex: none; overflow: visible;',
     '  padding: 16px; display: flex; flex-direction: column; gap: 12px;',
-    '  overscroll-behavior: contain;',
     '}',
     '.row { display: flex; }',
     '.row.from-guest { justify-content: flex-end; }',
@@ -166,27 +253,42 @@
     '  border: 1px solid rgba(41, 46, 56, 0.12);',
     '}',
     '.bubble p + p { margin-top: 9px; }',
+    /* Answer links render as a stacked pair: links[0] is the primary action,
+       links[1+] are secondary. Geometry matches the chips so the panel reads as
+       one system. */
     '.bubble a {',
-    '  color: ' + ORANGE + '; font-weight: 600; text-decoration: none;',
-    '  border-bottom: 1px solid rgba(255, 84, 0, 0.4);',
+    '  display: block; text-align: left; text-decoration: none;',
+    '  font-family: ' + SANS_MED + '; font-weight: 500; font-size: 14px;',
+    '  border-radius: ' + RADIUS + '; padding: 10px 12px;',
+    '  -webkit-tap-highlight-color: transparent;',
+    '  transition: background 120ms ease, border-color 120ms ease;',
     '}',
-    '.links { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }',
+    '.bubble a.primary { background: ' + ORANGE + '; color: #FFFFFF; border: 1px solid ' + ORANGE + '; }',
+    '.bubble a.secondary { background: #FFFFFF; color: ' + NAVY + '; border: 1px solid rgba(41, 46, 56, 0.28); }',
+    '.bubble a.primary:active { background: #E04A00; border-color: #E04A00; }',
+    '.bubble a.secondary:active { background: rgba(41, 46, 56, 0.06); }',
+    '.bubble a:focus-visible { outline: 2px solid ' + NAVY + '; outline-offset: 2px; }',
+    '.links { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }',
+    '.link-wrap { display: flex; flex-direction: column; gap: 3px; }',
+    '.link-caption { font-size: 11px; color: rgba(41, 46, 56, 0.55); padding: 0 2px;',
+    '  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
     '.intro { font-size: 13px; color: rgba(41, 46, 56, 0.66); padding: 2px 2px 0; }',
+    '.bubble.is-intro { font-size: 15px; line-height: 1.5; }',
 
     /* ---- options ---- */
     '.options {',
-    '  flex: none; padding: 12px 16px 14px;',
-    '  border-top: 1px solid rgba(41, 46, 56, 0.10);',
+    '  flex: none; padding: 4px 16px 0;',
     '  display: flex; flex-direction: column; gap: 8px;',
-    '  max-height: 46%; overflow-y: auto; overscroll-behavior: contain;',
+    '  overflow: visible;',
     '}',
     '.options-label {',
-    '  font-size: 11px; font-weight: 650; letter-spacing: 0.07em;',
+    '  font-family: ' + SANS_MED + '; font-size: 11px; font-weight: 500; letter-spacing: 0.07em;',
     '  text-transform: uppercase; color: rgba(41, 46, 56, 0.5); margin-bottom: 2px;',
     '}',
     '.chip {',
     '  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;',
-    '  font: inherit; font-size: 14.5px; color: ' + NAVY + '; cursor: pointer;',
+    '  font: inherit; font-family: ' + SANS_MED + '; font-weight: 500;',
+    '  font-size: 14.5px; color: ' + NAVY + '; cursor: pointer;',
     '  background: #FFFFFF; border: 1px solid rgba(41, 46, 56, 0.16);',
     '  border-radius: ' + RADIUS + '; padding: 10px 12px;',
     '  transition: border-color 120ms ease, background 120ms ease;',
@@ -199,10 +301,29 @@
     '.chip.ghost { background: transparent; border-style: dashed; color: rgba(41, 46, 56, 0.72); }',
     '.chip.ghost:active { background: rgba(255, 84, 0, 0.09); }',
 
+    /* ---- pinned action row ---- */
+    '.pinned {',
+    '  flex: none; display: flex; gap: 8px; padding: 10px 16px 12px;',
+    '  border-top: 1px solid rgba(41, 46, 56, 0.10); background: ' + CREAM + ';',
+    '}',
+    '.pin-btn {',
+    '  flex: 1 1 0; font: inherit; font-family: ' + SANS_MED + '; font-weight: 500;',
+    '  font-size: 13.5px;',
+    '  border-radius: ' + RADIUS + '; padding: 10px 12px; cursor: pointer;',
+    '  background: #FFFFFF; color: ' + NAVY + ';',
+    '  border: 1px solid rgba(41, 46, 56, 0.22);',
+    '  -webkit-tap-highlight-color: transparent;',
+    '  transition: background 120ms ease, border-color 120ms ease;',
+    '}',
+    '.pin-btn.person { border-color: ' + ORANGE + '; color: ' + ORANGE + '; }',
+    '.pin-btn:active { background: rgba(41, 46, 56, 0.06); }',
+    '.pin-btn.person:active { background: rgba(255, 84, 0, 0.08); }',
+    '.pin-btn:focus-visible { outline: 2px solid ' + ORANGE + '; outline-offset: 1px; }',
+
     /* ---- footer ---- */
     '.foot {',
     '  flex: none; display: flex; align-items: center; justify-content: space-between;',
-    '  gap: 10px; padding: 9px 16px 11px;',
+    '  gap: 10px; padding: 9px 16px calc(11px + env(safe-area-inset-bottom, 0px));',
     '  border-top: 1px solid rgba(41, 46, 56, 0.10);',
     '  font-size: 11.5px; color: rgba(41, 46, 56, 0.55);',
     '}',
@@ -217,9 +338,32 @@
 
     /* ---- small screens ---- */
     '@media (max-width: 480px) {',
-    '  .wrap { right: 12px; left: 12px; bottom: 12px; align-items: stretch; }',
-    '  .panel { width: auto; height: 74vh; max-height: calc(100vh - 108px); }',
-    '  .launcher { align-self: flex-end; }',
+    '  .wrap { right: 0; left: 0; bottom: 0; align-items: stretch; }',
+    '  .panel {',
+    '    width: auto; border-radius: 0; border-left: 0; border-right: 0;',
+    '    height: 100vh; max-height: 100vh;',
+    '    padding-top: env(safe-area-inset-top, 0px);',
+    '  }',
+    /* On a full-height sheet the launcher would overlap the panel; the header X
+       (44px target) is the close affordance there. */
+    '  .wrap.is-open .launcher { display: none; }',
+    /* the panel header lockup stays complete at every width - the icon-only
+       allowance is the LAUNCHER's, never the panel's */
+    /* The sheet needs .wrap flush to the bottom, but the launcher must not be:
+       at bottom 0 iOS Safari's toolbar draws over it. env() is 0 without
+       viewport-fit=cover, so max() supplies a floor that clears the toolbar
+       regardless, and grows with the inset if the host page ever opts in. */
+    '  .launcher {',
+    '    align-self: flex-end;',
+    '    margin-right: 16px;',
+    '    margin-bottom: max(34px, calc(16px + env(safe-area-inset-bottom, 0px)));',
+    '  }',
+    '  .launcher-pill { display: none; }',
+    '}',
+    '@supports (height: 100dvh) {',
+    '  @media (max-width: 480px) {',
+    '    .panel { height: 100dvh; max-height: 100dvh; }',
+    '  }',
     '}',
 
     /* ---- hover, desktop only ------------------------------------------ */
@@ -229,16 +373,20 @@
        these rules at all - nothing to stick. :active and :focus-visible are
        deliberately outside this block; both self-clear. */
     '@media (hover: hover) {',
-    '  .launcher:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(41, 46, 56, 0.32); }',
+    '  .launcher:hover .launcher-bug { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(41, 46, 56, 0.32); }',
+    '  .launcher:hover .launcher-pill { transform: translateY(-2px); }',
     '  .close:hover { background: rgba(41, 46, 56, 0.07); }',
-    '  .bubble a:hover { border-bottom-color: ' + ORANGE + '; }',
+    '  .bubble a.primary:hover { background: #E04A00; border-color: #E04A00; }',
+    '  .bubble a.secondary:hover { border-color: rgba(41, 46, 56, 0.55); }',
     '  .chip:hover { border-color: ' + ORANGE + '; background: #FFF6F1; }',
     '  .chip.ghost:hover { background: rgba(255, 84, 0, 0.05); }',
     '  .restart:hover { background: rgba(255, 84, 0, 0.09); }',
+    '  .pin-btn:hover { border-color: rgba(41, 46, 56, 0.5); }',
+    '  .pin-btn.person:hover { background: rgba(255, 84, 0, 0.06); }',
     '}',
 
     '@media (prefers-reduced-motion: reduce) {',
-    '  .panel, .launcher, .chip { transition: none; }',
+    '  .panel, .launcher-pill, .launcher-bug, .chip { transition: none; }',
     '}'
   ].join('\n');
 
@@ -269,15 +417,17 @@
     /* panel ------------------------------------------------------------ */
     var panel = el('div', 'panel');
     panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-label', route.title || meta.title || 'GraceGuide');
+    panel.setAttribute('aria-label', 'Grace guest assistant');
 
     var head = el('div', 'head');
     var mark = el('span', 'mark');
     mark.innerHTML = CROSS_SVG;
     var headText = el('div', 'head-text');
-    headText.appendChild(el('div', 'head-title', route.title || meta.title || 'GraceGuide'));
-    var subtitle = route.subtitle || meta.subtitle;
-    if (subtitle) headText.appendChild(el('div', 'head-sub', subtitle));
+    /* Header is the brand lockup - always 'Grace' + eyebrow, never the route
+       title. The route title is a body heading now (see seed()). */
+    headText.appendChild(el('div', 'head-title', meta.title || 'Grace'));
+    var subtitle = route.subtitle || meta.subtitle || 'Guest Assistant';
+    headText.appendChild(el('div', 'head-sub', subtitle));
     var closeBtn = el('button', 'close');
     closeBtn.type = 'button';
     closeBtn.setAttribute('aria-label', 'Close');
@@ -291,6 +441,10 @@
     feed.setAttribute('aria-live', 'polite');
 
     var options = el('div', 'options');
+    var scroll = el('div', 'scroll');
+    scroll.appendChild(feed);
+    scroll.appendChild(options);
+    var pinned = el('div', 'pinned');
 
     var foot = el('div', 'foot');
     foot.appendChild(el('span', null,
@@ -300,8 +454,8 @@
     foot.appendChild(restart);
 
     panel.appendChild(head);
-    panel.appendChild(feed);
-    panel.appendChild(options);
+    panel.appendChild(scroll);
+    panel.appendChild(pinned);
     panel.appendChild(foot);
 
     /* launcher --------------------------------------------------------- */
@@ -309,7 +463,14 @@
     launcher.type = 'button';
     launcher.setAttribute('aria-label', route.launcherLabel || meta.launcherLabel || 'Ask a question about visiting');
     launcher.setAttribute('aria-expanded', 'false');
-    launcher.innerHTML = CROSS_SVG;
+    var launcherPill = el('span', 'launcher-pill',
+      route.launcherLabel || meta.launcherLabel || 'Ask Grace');
+    var launcherBug = el('span', 'launcher-bug');
+    launcherBug.innerHTML = CROSS_SVG;
+    launcher.appendChild(launcherPill);
+    launcher.appendChild(launcherBug);
+
+    scroll.addEventListener('scroll', updateEdgeFade, { passive: true });
 
     wrap.appendChild(panel);
     wrap.appendChild(launcher);
@@ -332,14 +493,18 @@
       });
       if (Array.isArray(node.links) && node.links.length) {
         var links = el('div', 'links');
-        node.links.forEach(function (link) {
-          var a = el('a', null, link.label || link.href);
+        node.links.forEach(function (link, i) {
+          var wrapEl = el('div', 'link-wrap');
+          var a = el('a', i === 0 ? 'primary' : 'secondary', link.label || link.href);
           a.href = link.href;
           if (/^https?:/i.test(link.href) && link.href.indexOf(window.location.host) === -1) {
             a.target = '_blank';
             a.rel = 'noopener noreferrer';
           }
-          links.appendChild(a);
+          wrapEl.appendChild(a);
+          var caption = destinationCaption(link);
+          if (caption) wrapEl.appendChild(el('div', 'link-caption', caption));
+          links.appendChild(wrapEl);
         });
         bubble.appendChild(links);
       }
@@ -347,21 +512,67 @@
       feed.appendChild(row);
     }
 
-    function renderOptions(ids, atHome) {
-      options.textContent = '';
-      options.appendChild(el('div', 'options-label', atHome
-        ? (meta.startersLabel || 'Common questions')
-        : (meta.followupsLabel || 'People also ask')));
-
-      ids.forEach(function (id) {
-        var node = questions[id];
-        if (!node) return;
-        options.appendChild(chip(node.label, id, false));
-      });
-
-      if (!atHome) {
-        options.appendChild(chip(meta.homeLabel || 'Back to the main questions', HOME_ID, true));
+    /* One muted line under each action saying where it actually goes, so a
+       guest knows before they tap. Derived from the href, never authored. */
+    function destinationCaption(link) {
+      var href = String(link.href || '');
+      var label = String(link.label || '');
+      if (href.indexOf('461746') !== -1) return 'Message goes to the church office';
+      if (href.indexOf('tel:') === 0) return 'Calls the church office';
+      if (href.indexOf('churchcenter.com') !== -1) {
+        var noun = /^give/i.test(label) ? 'giving'
+                 : label.toLowerCase().replace(/^(open|see|go to|start|view)\s+/, '');
+        return 'Opens ' + (noun || 'the page') + ' \u00b7 Church Center';
       }
+      if (href.charAt(0) === '/') return 'Opens discovergrace.com' + href;
+      var m = /^https?:\/\/([^\/]+)/i.exec(href);
+      if (m) return 'Opens ' + m[1];
+      return '';
+    }
+
+    /* atHome picks the section label; isHomeCard decides whether Back appears.
+       They are NOT the same: an answer card can offer the starter chips as its
+       browse list and still need a Back button. */
+    function renderOptions(ids, atHome, labelOverride, isHomeCard) {
+      options.textContent = '';
+      options.appendChild(el('div', 'options-label', labelOverride || (atHome
+        ? (meta.startersLabel || 'Common questions')
+        : (meta.followupsLabel || 'People also ask'))));
+
+      /* talk-person is a pinned action now, never a chip. The filter is
+         belt-and-suspenders while the Sheet's follow-up lists still mention it. */
+      ids.filter(function (id) { return id !== TALK_PERSON_ID; })
+         .forEach(function (id) {
+           var node = questions[id];
+           if (!node) return;
+           options.appendChild(chip(node.label, id, false));
+         });
+
+      renderPinned(isHomeCard === undefined ? atHome : isHomeCard);
+    }
+
+    /* Fixed two-button row under the chips: Back (answer views only) and Talk to
+       a person (always, straight out of questions['talk-person']). */
+    function renderPinned(atHome) {
+      pinned.textContent = '';
+      if (!atHome) {
+        pinned.appendChild(pinButton(meta.homeLabel || '\u2190 Back', '', function () {
+          goHome();
+        }));
+      }
+      var person = questions[TALK_PERSON_ID];
+      if (person) {
+        pinned.appendChild(pinButton(person.label, ' person', function () {
+          select(TALK_PERSON_ID);
+        }));
+      }
+    }
+
+    function pinButton(label, extraClass, onClick) {
+      var b = el('button', 'pin-btn' + (extraClass || ''), label);
+      b.type = 'button';
+      b.addEventListener('click', onClick);
+      return b;
     }
 
     function chip(label, id, ghost) {
@@ -373,14 +584,23 @@
       return button;
     }
 
-    function scrollFeed() {
-      feed.scrollTop = feed.scrollHeight;
+    /* Single-exchange card model: each view REPLACES the last, and every view
+       rests at the top so the question bubble is the first thing a guest sees.
+       Nothing accumulates, so nothing pushes the top of the card out of sight. */
+    function resetScroll() {
+      scroll.scrollTop = 0;
+      updateEdgeFade();
     }
 
-    function goHome(silent) {
-      if (!silent) askedBubble(meta.homeLabel || 'Back to the main questions');
-      renderOptions(starters, true);
-      scrollFeed();
+    /* The fade is only meaningful while something is still below the fold. */
+    function updateEdgeFade() {
+      var atEnd = scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 1;
+      scroll.classList.toggle('at-end', atEnd);
+    }
+
+    /* Back is the history - it returns to the starters card, at the top. */
+    function goHome() {
+      seed();
       focusFirstOption();
     }
 
@@ -453,20 +673,29 @@
     }
 
     function select(id) {
-      if (id === HOME_ID) { goHome(false); return; }
+      if (id === HOME_ID) { goHome(); return; }
       var node = questions[id];
       if (!node) return;
 
+      /* Clear first - this view is the whole card, not another entry in a log. */
+      feed.textContent = '';
       askedBubble(node.label);
       answerBubble(node);
 
-      var followups = (node.followups || []).filter(function (fid) { return questions[fid]; });
+      var followups = (node.followups || []).filter(function (fid) {
+        return questions[fid] && fid !== TALK_PERSON_ID;
+      });
+      /* After 'Talk to a person' the remaining chips are a browsing offer, not a
+         follow-up set - the mockup labels them accordingly. */
+      var override = id === TALK_PERSON_ID ? 'OR KEEP BROWSING' : null;
       if (followups.length) {
-        renderOptions(followups, false);
+        renderOptions(followups, false, override, false);
       } else {
-        renderOptions(starters.filter(function (sid) { return sid !== id; }), true);
+        /* No follow-ups: offer the starters as a browse list, but this is still
+           an answer card, so Back stays. */
+        renderOptions(starters.filter(function (sid) { return sid !== id; }), true, override, false);
       }
-      scrollFeed();
+      resetScroll();
       focusFirstOption();
 
       /* Everything above already happened. This can only reorder what is there. */
@@ -490,15 +719,18 @@
 
     function seed() {
       feed.textContent = '';
+      if (route.title) {
+        feed.appendChild(el('div', 'route-heading', route.title));
+      }
       if (route.intro || meta.intro) {
         var row = el('div', 'row from-church');
-        var bubble = el('div', 'bubble');
+        var bubble = el('div', 'bubble is-intro');
         bubble.appendChild(el('p', null, route.intro || meta.intro));
         row.appendChild(bubble);
         feed.appendChild(row);
       }
-      renderOptions(starters, true);
-      feed.scrollTop = 0;
+      renderOptions(starters, true, null, true);
+      resetScroll();
     }
 
     /* ---- open / close ------------------------------------------------ */
@@ -509,11 +741,15 @@
       if (isOpen) return;
       isOpen = true;
       panel.classList.add('is-visible');
+      wrap.classList.add('is-open');
       launcher.setAttribute('aria-expanded', 'true');
-      launcher.innerHTML = CLOSE_SVG;
-      launcher.querySelector('svg').setAttribute('class', 'icon-close');
+      launcherBug.innerHTML = CLOSE_SVG;
+      launcherPill.style.display = 'none';
       launcher.setAttribute('aria-label', 'Close');
       requestAnimationFrame(function () { panel.classList.add('is-open'); });
+      /* If the guest closed the panel mid-card, reopening should not flash the
+         old scroll position before they can read the top. */
+      resetScroll();
       focusFirstOption();
     }
 
@@ -521,8 +757,10 @@
       if (!isOpen) return;
       isOpen = false;
       panel.classList.remove('is-open');
+      wrap.classList.remove('is-open');
       launcher.setAttribute('aria-expanded', 'false');
-      launcher.innerHTML = CROSS_SVG;
+      launcherBug.innerHTML = CROSS_SVG;
+      launcherPill.style.display = '';
       launcher.setAttribute('aria-label', route.launcherLabel || meta.launcherLabel || 'Ask a question about visiting');
       window.setTimeout(function () {
         if (!isOpen) panel.classList.remove('is-visible');
