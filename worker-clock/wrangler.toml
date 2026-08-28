@@ -1,0 +1,9 @@
+name = "grace-publish-clock"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# The reliable clock. GitHub's own schedule: block is kept as a redundant backup
+# but proved unreliable (7 consecutive ticks missed, 2026-08-28), so this Worker
+# is what actually drives the cadence.
+[triggers]
+crons = ["17 */2 * * *"]

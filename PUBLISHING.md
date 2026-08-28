@@ -13,9 +13,15 @@ Publishing is **automated**. Nobody runs a command to ship.
    - `ANSWERS` tab: question text, answer text, status, links, follow-up slugs.
    - `PLACEMENT` tab: which pages show the assistant, and which questions start
      the panel on each one.
-2. **A GitHub Action publishes on a schedule** — every two hours at :17 UTC
-   (`.github/workflows/auto-publish.yml`). Each run reads the Sheet, validates,
-   and deploys only if something actually changed.
+2. **A Cloudflare cron we operate dispatches publishes every two hours**
+   (`worker-clock/`, Worker `grace-publish-clock`, cron `17 */2 * * *`). It POSTs
+   a `workflow_dispatch` to `.github/workflows/auto-publish.yml`. Each run reads
+   the Sheet, validates, and deploys only if something actually changed.
+   **GitHub's own `schedule:` block is kept as a redundant backup, not the primary
+   clock** — it missed 7 consecutive ticks over 16 hours on 2026-08-28 with a
+   valid cron, an active workflow, and the file on the default branch. Treat
+   GitHub's scheduler as best-effort; the Cloudflare cron is the reliable one.
+   If both fire, the workflow's `concurrency: auto-publish` group queues them.
 3. **The regenerated `public/answers.json` is committed back** to `main` by the
    workflow, so the repo always matches what is live.
 
@@ -43,8 +49,41 @@ project, and the `drive.metadata.readonly` scope in `publish.py`'s `SCOPES`.
 
 ### Running it by hand
 
-GitHub → **Actions** → **auto-publish** → **Run workflow**. Same gates apply,
-including the debounce — a manual run right after an edit will still skip.
+GitHub → **Actions** → **auto-publish** → **Run workflow**. Two inputs:
+
+| Input | Effect |
+|---|---|
+| `force_publish` | Skips the 30-minute debounce (`--min-quiet-minutes 0`). **Dispatch only** — `inputs` is empty on a schedule event, so the clock can never skip the debounce. |
+| `simulate` | `none` (default), `failure`, or `deploy_ping`. Exercises the notification paths without reading the Sheet or deploying. |
+
+Without `force_publish`, the debounce still applies — a manual run right after an
+edit will correctly skip.
+
+You can also poke the clock Worker directly:
+`curl https://grace-publish-clock.relax-tech.workers.dev` dispatches a run
+immediately and returns `{"ok":true,"status":204}`.
+
+### Notifications
+
+Push alerts go to an [ntfy.sh](https://ntfy.sh) topic held in the `NTFY_TOPIC`
+secret (GitHub repo secret, and a Worker secret on the clock).
+
+| Tier | Fires when | Priority |
+|---|---|---|
+| **Publish FAILED** | any workflow step fails — validator exit 2, deploy error, push failure | high |
+| **Published** | a run reports `RESULT status=deployed` | default |
+| **Clock dispatch FAILED** | the Cloudflare Worker cannot reach GitHub (non-2xx or fetch throw) | high |
+
+Bodies carry a status code and timestamp only — never a token, never a response
+body, because those can echo request context into a log.
+
+**What is deliberately NOT alerted:** `status=nochange` and `status=debounced`.
+Both are healthy outcomes and would train you to ignore the channel.
+
+**The gap worth knowing:** a clock that never fires produces no failed run and so
+no alert. That is exactly the 2026-08-28 failure mode. The clock Worker closes it
+for GitHub's scheduler, but nothing yet watches the Worker itself — a
+"no successful publish in N hours" check is the missing piece.
 
 ### When something breaks
 
@@ -81,7 +120,16 @@ not happen:
   `tel:`).
 - **`watch-online` as a follow-up** — it is starter-only by policy.
 - **Empty answers** — a shipped row with no answer text.
-- **Duplicate slugs.**
+- **Duplicate slugs**, and **duplicate IDs**.
+- **A shippable row with an empty Slug** — cleared to ship but unaddressable by
+  any starter or follow-up.
+- **A destination cell that yields zero usable links** — someone wrote a
+  destination and it produced nothing. Previously a warning, which let a button
+  vanish silently from a shipped answer.
+
+Input is normalised before any of it is judged: `Status`, `Page` and `Slug` are
+trimmed and compared case-insensitively, and a plain ASCII `->` is accepted
+anywhere the Sheet's `→` is expected.
 
 ## Known behaviors, not bugs
 
@@ -140,6 +188,16 @@ error payloads cannot echo request context into a public log.
 
 Corpus content **does** appear in logs (warnings name slugs and link labels).
 That is fine: the same text ships to a public website minutes later.
+
+## The one-off Sheet-writing tools
+
+`tools/` holds the scripts used to write into the Sheet during the 2026-08-28
+content session. They are **not** part of the publish path and are kept for
+reference and reuse.
+
+Every one of them needs the service account temporarily promoted to **Editor** on
+the Sheet, and reverted to **Viewer** afterwards. `publish.py` only ever needs
+read. Each script defaults to a dry run and requires `--apply` to write.
 
 ## Adding a page later
 

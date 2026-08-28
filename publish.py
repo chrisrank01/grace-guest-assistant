@@ -96,6 +96,7 @@ LIVE_URL = 'https://grace-assistant.pages.dev/grace-assistant.js'
 LIVE_JSON = 'https://grace-assistant.pages.dev/answers.json'
 
 WARNINGS = []
+FATAL = []
 QUIET = False
 
 
@@ -114,6 +115,23 @@ def result(**fields):
 def warn(msg):
     WARNINGS.append(msg)
     print(f'  WARN  {msg}')
+
+
+def fatal(msg):
+    """A condition that must stop the publish. Collected so one run reports
+    every problem rather than dying on the first."""
+    FATAL.append(msg)
+    print(f'  FATAL {msg}')
+
+
+def norm(value):
+    """Trim. Sheet cells routinely carry stray leading/trailing space."""
+    return (value or '').strip()
+
+
+def fold(value):
+    """Trim + casefold, for comparisons that must not care about case."""
+    return norm(value).casefold()
 
 
 def die(problems):
@@ -205,8 +223,11 @@ def read_placement(sh):
 
 def parse_one_link(seg, slug):
     """One 'Label -> destination' segment -> {label, href}, or None (with a
-    warning) if the destination is prose rather than somewhere a browser can go."""
-    seg = seg.strip()
+    warning) if the destination is prose rather than somewhere a browser can go.
+
+    Accepts the Sheet's own arrow (U+2192) or a plain ASCII '->', because a
+    hand-typed cell will not always carry the fancy one."""
+    seg = norm(seg).replace('->', '→')
     if not seg:
         return None
     if '→' not in seg:
@@ -227,7 +248,7 @@ def parse_links(raw, slug):
     """A Primary Action cell -> list of links. Multiple actions are separated by
     ' | '; the first is the primary and renders as the orange button. A cell with
     no separator behaves exactly as a single-link cell always has."""
-    raw = (raw or '').strip()
+    raw = norm(raw)
     if not raw:
         return []
     segments = [seg for seg in raw.split(' | ')] if ' | ' in raw else [raw]
@@ -240,35 +261,55 @@ def build(sh):
         die(['PLACEMENT has no SHOW rows matching PILOT_ROUTES'])
 
     # Page -> route path, derived from PLACEMENT rather than hardcoded names
-    page_to_route = {cfg['page']: path for path, cfg in routes_cfg.items()}
+    page_to_route = {fold(cfg['page']): path for path, cfg in routes_cfg.items()}
     say(f'  pilot pages from PLACEMENT: {page_to_route}')
 
     _, rows = tabulate(sh.worksheet('ANSWERS').get_all_values())
 
     questions, by_id, drafts, skipped = {}, {}, 0, 0
     page_slugs = {}
+    seen_ids = set()
+    shippable = {fold(x) for x in SHIP_STATUSES}
     for row in rows:
-        rid, slug = row.get(COL_ID, ''), row.get(COL_SLUG, '')
-        page, status = row.get(COL_PAGE, ''), row.get(COL_STATUS, '').upper()
-        question, answer = row.get(COL_Q, ''), row.get(COL_A, '')
+        rid, slug = norm(row.get(COL_ID)), norm(row.get(COL_SLUG))
+        page, status = norm(row.get(COL_PAGE)), norm(row.get(COL_STATUS))
+        question, answer = norm(row.get(COL_Q)), norm(row.get(COL_A))
 
-        in_scope = page in page_to_route or slug == TALK_PERSON_SLUG
+        # GATE: an ID may appear once. Duplicates make starter lists ambiguous.
+        if rid:
+            if rid in seen_ids:
+                fatal(f'duplicate ID {rid!r}')
+            seen_ids.add(rid)
+
+        in_scope = fold(page) in page_to_route or slug == TALK_PERSON_SLUG
         if not in_scope:
             skipped += 1
             continue
-        if status not in SHIP_STATUSES:
+        if fold(status) not in shippable:
             warn(f'{rid} ({slug}): status {status or "(blank)"} - not shipped')
             continue
-        if not (slug and question and answer):
-            warn(f'{rid}: missing slug/question/answer - not shipped')
+        # GATE: cleared to ship but unaddressable. Dropping it silently hides
+        # content somebody believes is live.
+        if not slug:
+            fatal(f'{rid}: status {status} is shippable but Slug is empty')
+            continue
+        if not (question and answer):
+            warn(f'{rid}: missing question/answer - not shipped')
             continue
         if slug in questions:
-            die([f'duplicate slug {slug!r} (second occurrence at {rid})'])
+            fatal(f'duplicate slug {slug!r} (second occurrence at {rid})')
+            continue
 
         if status == 'DRAFT':
             drafts += 1
         entry = {'label': question, 'answer': [p.strip() for p in answer.split('\n\n') if p.strip()]}
-        links = parse_links(row.get(COL_LINK, ''), slug)
+        raw_link = norm(row.get(COL_LINK))
+        links = parse_links(raw_link, slug)
+        # GATE: a destination was written and produced nothing. Previously a
+        # warning, which let a button vanish silently from a shipped answer.
+        if raw_link and not links:
+            fatal(f'{rid} ({slug}): destination cell {raw_link[:60]!r} yielded zero '
+                  'usable links - fix the cell or clear it')
         if links:
             entry['links'] = links
         entry['_followups_raw'] = [s.strip() for s in row.get(COL_FOLLOWUPS, '').split(',') if s.strip()]
@@ -276,9 +317,11 @@ def build(sh):
         by_id[rid] = slug
         # Expected membership comes from the Page column, independent of the
         # follow-up graph - that is what lets the BFS check below actually fail.
-        if page in page_to_route:
-            page_slugs.setdefault(page_to_route[page], set()).add(slug)
+        if fold(page) in page_to_route:
+            page_slugs.setdefault(page_to_route[fold(page)], set()).add(slug)
 
+    if FATAL:
+        die(FATAL)
     say(f'  in scope: {len(questions)} questions   out of scope: {skipped} rows')
     if drafts:
         warn(f'{drafts} DRAFT row(s) shipped - SHIP_STATUSES currently allows DRAFT')

@@ -4,13 +4,26 @@ name: auto-publish
 # The gates are: the Status column (HOLD never ships), publish.py's validator
 # (exit 2 = nothing written), and a quiescence debounce so a half-finished edit
 # cannot go out mid-typing.
+#
+# CADENCE: a Cloudflare cron we operate (worker-clock/) dispatches this every two
+# hours. GitHub's own schedule: block below is a redundant backup - it has proven
+# unreliable (16h / 7 consecutive ticks missed on 2026-08-28) and must not be
+# treated as the primary clock.
 
 on:
   schedule:
-    # Every two hours at :17 - offset off the hour so it does not collide with
-    # the crowd of :00 cron jobs on GitHub's shared runners.
-    - cron: '17 */2 * * *'
-  workflow_dispatch:        # manual "Run workflow" button
+    - cron: '17 */2 * * *'     # BACKUP only. See note above.
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: 'Skip the 30-minute quiescence debounce (dispatch only)'
+        type: boolean
+        default: false
+      simulate:
+        description: 'Test the notification paths without touching production'
+        type: choice
+        options: [none, failure, deploy_ping]
+        default: none
 
 concurrency:
   group: auto-publish
@@ -35,7 +48,20 @@ jobs:
       - name: Install wrangler
         run: npm install --no-save wrangler@4
 
+      # ---- simulation shortcuts ------------------------------------------
+      # Exercise the notification wiring without reading the Sheet or deploying.
+      - name: SIMULATE failure
+        if: inputs.simulate == 'failure'
+        run: |
+          echo "SIMULATED failure - no Sheet read, no deploy"
+          exit 1
+
+      - name: SIMULATE deploy ping
+        if: inputs.simulate == 'deploy_ping'
+        run: echo "RESULT status=deployed questions=SIMULATED warnings=0 changed=1" | tee "$GITHUB_STEP_SUMMARY"
+
       - name: Write service-account key to a private temp file
+        if: inputs.simulate == 'none' || inputs.simulate == ''
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
@@ -50,13 +76,28 @@ jobs:
           echo "key written to \$RUNNER_TEMP (contents not logged)"
 
       - name: Publish
+        id: publish
+        if: inputs.simulate == 'none' || inputs.simulate == ''
         env:
           GRACE_PUBLISHER_KEY: ${{ env.GRACE_PUBLISHER_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           PATH: ${{ github.workspace }}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
-        run: python publish.py --deploy --min-quiet-minutes 30 --quiet
+        run: |
+          # force_publish is dispatch-only by construction: `inputs` is empty on a
+          # schedule event, so the debounce can never be skipped by the clock.
+          QUIET_MIN=30
+          if [ "${{ inputs.force_publish }}" = "true" ] && [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            QUIET_MIN=0
+            echo "force_publish: debounce skipped"
+          fi
+          set -o pipefail
+          python publish.py --deploy --min-quiet-minutes "$QUIET_MIN" --quiet | tee publish.out
+          RESULT_LINE="$(grep -m1 '^RESULT ' publish.out || echo 'RESULT status=unknown')"
+          echo "result_line=$RESULT_LINE" >> "$GITHUB_OUTPUT"
+          echo "$RESULT_LINE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit regenerated answers.json if it changed
+        if: inputs.simulate == 'none' || inputs.simulate == ''
         run: |
           if git diff --quiet -- public/answers.json; then
             echo "no content change - nothing to commit"
@@ -66,7 +107,35 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add public/answers.json
           git commit -m "auto-publish: $(date -u '+%Y-%m-%d %H:%M UTC')"
-          git push
+          # Another push can land mid-run (it has). Rebase and retry once rather
+          # than failing a run whose deploy already succeeded.
+          git pull --rebase --quiet origin main || true
+          git push || (sleep 5 && git pull --rebase --quiet origin main && git push)
+
+      # ---- notifications --------------------------------------------------
+      - name: Notify on failure
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          curl -s -m 20 \
+            -H "Title: Grace publish FAILED" \
+            -H "Priority: high" \
+            -H "Tags: rotating_light" \
+            -d "run ${{ github.run_id }} · $(date -u '+%Y-%m-%d %H:%M UTC') · see Actions log" \
+            "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null || true
+
+      - name: Notify on deploy
+        if: success() && contains(steps.publish.outputs.result_line, 'status=deployed')
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          curl -s -m 20 \
+            -H "Title: Grace published" \
+            -H "Priority: default" \
+            -H "Tags: white_check_mark" \
+            -d "${{ steps.publish.outputs.result_line }} · $(date -u '+%H:%M UTC')" \
+            "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null || true
 
       - name: Remove the key
         if: always()
