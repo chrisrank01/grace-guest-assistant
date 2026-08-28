@@ -178,8 +178,12 @@ dashboard, not here. Update them there when people change.
 **Cloudflare account:** `542c6caf232f86b4a1e6e69cb49e5326`, currently under
 chris@relax-tech.com.
 
-**Figma reference file:** _URL and sharing settings not recorded in this repo._
-Fill in before handoff, and transfer ownership with the rest.
+**Figma reference file:** *Grace · Guest Assistant — Production Reference 2026-08-28*,
+file key `KlNVjhoZAQkpJIBZv2jJh0` —
+`https://www.figma.com/design/KlNVjhoZAQkpJIBZv2jJh0/Grace-·-Guest-Assistant-—-Production-Reference-2026-08-28`
+16 production-state frames plus a design-token card. This is T's markup surface;
+the widget CSS remains production truth. **Confirm sharing settings and transfer
+ownership at handoff.**
 
 ---
 
@@ -308,7 +312,7 @@ widget still works — chips just stay in their static order, silently.
       a mock harness with a visible TEST PAGE banner.
 - [ ] **Demo site:** tear down the `grace-demo` Pages project and its Access app,
       or agree who keeps paying attention to it.
-- [ ] **Figma:** record the reference file URL, transfer ownership, review sharing.
+- [ ] **Figma:** transfer ownership of `KlNVjhoZAQkpJIBZv2jJh0` and review sharing.
 - [ ] **Repo:** decide transfer to a Grace-owned GitHub account, or fork. It is
       **public** today — check that is still intended. Note the repo contains no
       secrets, only names.
