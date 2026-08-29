@@ -28,6 +28,20 @@
   var ROUTER_URL = script.getAttribute('data-router') || '';
   var ROUTER_TIMEOUT_MS = 2000;
 
+  /* Guest-flow experiment, DEFAULT OFF. Every path it gates is written as
+     `HIDE_TAPPED && ...`, so with the flag absent the widget behaves exactly as
+     it did before this existed. Query-only and hyphenated to match the existing
+     ?ga-route= idiom - window.location.search is the only environment this
+     widget has ever read, and one convention beats two. */
+  var HIDE_TAPPED = /[?&]ga-hide-tapped=1(?:&|$)/.test(window.location.search);
+
+  /* PROVISIONAL copy - T rewrites it. Hardcoded on purpose: the per-route
+     override plumbing (route.X || meta.X || literal) could carry this in one
+     line, but the Sheet cannot emit the key yet - that needs a publish.py
+     change and a PLACEMENT column, both out of scope for this pass. */
+  var EXHAUSTION_NOTE =
+    'That covers everything I can answer here. Want to talk with a real person?';
+
   var NAVY = '#292E38';
   var ORANGE = '#FF5400';
   var CREAM = '#FAFAF7';
@@ -403,6 +417,11 @@
 
     if (!starters.length) return; /* nothing to ask here - stay off the page */
 
+    /* Flag-gated state. In-memory only for this pageview: no localStorage, no
+       sessionStorage, no cookies. A reload is the reset, by design. */
+    var tapped = {};
+    var exhausted = false; /* latch - the handoff fires at most once per pass */
+
     var host = document.createElement('div');
     host.setAttribute('data-grace-assistant', '');
     var root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
@@ -534,21 +553,61 @@
        They are NOT the same: an answer card can offer the starter chips as its
        browse list and still need a Back button. */
     function renderOptions(ids, atHome, labelOverride, isHomeCard) {
-      options.textContent = '';
-      options.appendChild(el('div', 'options-label', labelOverride || (atHome
-        ? (meta.startersLabel || 'Common questions')
-        : (meta.followupsLabel || 'People also ask'))));
-
       /* talk-person is a pinned action now, never a chip. The filter is
-         belt-and-suspenders while the Sheet's follow-up lists still mention it. */
-      ids.filter(function (id) { return id !== TALK_PERSON_ID; })
-         .forEach(function (id) {
-           var node = questions[id];
-           if (!node) return;
-           options.appendChild(chip(node.label, id, false));
-         });
+         belt-and-suspenders while the Sheet's follow-up lists still mention it.
+         The same pass drops anything already tapped, so all three callers -
+         seed(), the follow-up render and the starter fallback - inherit the
+         hiding from one place and none of them has to remember to. */
+      var visible = ids.filter(function (id) {
+        if (id === TALK_PERSON_ID) return false;
+        if (HIDE_TAPPED && tapped[id]) return false;
+        return !!questions[id];
+      });
+
+      /* Exhaustion. select() already drops to the starter pool whenever a
+         follow-up list filters to nothing, so the only way to arrive here empty
+         is that the starter pool is empty too - which is exactly the approved
+         condition (current list empty AND starter pool empty). The latch stops
+         the handoff re-firing out of talk-person's own render, and out of Back
+         landing on the same empty starters card afterwards. */
+      if (HIDE_TAPPED && !exhausted && !visible.length && questions[TALK_PERSON_ID]) {
+        enterExhaustion();
+        return;
+      }
+
+      options.textContent = '';
+      /* A section heading over zero chips reads as a broken card. Suppressed
+         only under the flag - flag-off rendering stays byte-identical. */
+      if (visible.length || !HIDE_TAPPED) {
+        options.appendChild(el('div', 'options-label', labelOverride || (atHome
+          ? (meta.startersLabel || 'Common questions')
+          : (meta.followupsLabel || 'People also ask'))));
+      }
+
+      visible.forEach(function (id) {
+        options.appendChild(chip(questions[id].label, id, false));
+      });
 
       renderPinned(isHomeCard === undefined ? atHome : isHomeCard);
+    }
+
+    /* The handoff, via the same handler a tap on the pinned button invokes.
+       Two ordering rules, both load-bearing:
+         1. Latch BEFORE select(). talk-person has no follow-ups, so select()
+            re-enters renderOptions through the starter fallback - still empty -
+            and without the latch would call straight back in here forever.
+         2. Inject the note AFTER select() returns. select() clears the feed, so
+            a note written first would be wiped before the guest ever saw it. */
+    function enterExhaustion() {
+      exhausted = true;
+      select(TALK_PERSON_ID);
+
+      var row = el('div', 'row from-church');
+      var bubble = el('div', 'bubble is-intro');
+      bubble.appendChild(el('p', null, EXHAUSTION_NOTE));
+      row.appendChild(bubble);
+      feed.insertBefore(row, feed.firstChild);
+      resetScroll();
     }
 
     /* Fixed two-button row under the chips: Back (answer views only) and Talk to
@@ -677,6 +736,11 @@
       var node = questions[id];
       if (!node) return;
 
+      /* Record before rendering, so the question just tapped is already gone
+         from the lists this same render builds. talk-person is exempt: it is a
+         pinned action and must never count toward exhaustion. */
+      if (HIDE_TAPPED && id !== TALK_PERSON_ID) tapped[id] = true;
+
       /* Clear first - this view is the whole card, not another entry in a log. */
       feed.textContent = '';
       askedBubble(node.label);
@@ -685,11 +749,17 @@
       var followups = (node.followups || []).filter(function (fid) {
         return questions[fid] && fid !== TALK_PERSON_ID;
       });
+      /* A follow-up list that filters to nothing is NOT exhaustion while
+         starters remain - it drops to the browse list below, which renderOptions
+         filters again. Flag off, this is the same array as followups. */
+      var visibleFollowups = followups.filter(function (fid) {
+        return !(HIDE_TAPPED && tapped[fid]);
+      });
       /* After 'Talk to a person' the remaining chips are a browsing offer, not a
          follow-up set - the mockup labels them accordingly. */
       var override = id === TALK_PERSON_ID ? 'OR KEEP BROWSING' : null;
-      if (followups.length) {
-        renderOptions(followups, false, override, false);
+      if (visibleFollowups.length) {
+        renderOptions(visibleFollowups, false, override, false);
       } else {
         /* No follow-ups: offer the starters as a browse list, but this is still
            an answer card, so Back stays. */
@@ -699,9 +769,9 @@
       focusFirstOption();
 
       /* Everything above already happened. This can only reorder what is there. */
-      if (ROUTER_URL && followups.length >= 2) {
+      if (ROUTER_URL && visibleFollowups.length >= 2) {
         try {
-          rankFollowups(id, followups);
+          rankFollowups(id, visibleFollowups);
         } catch (err) {
           /* never let the enhancement break the answer that is already shown */
         }
@@ -770,7 +840,16 @@
 
     launcher.addEventListener('click', function () { isOpen ? close() : open(); });
     closeBtn.addEventListener('click', close);
-    restart.addEventListener('click', function () { seed(); focusFirstOption(); });
+    /* Start over is the labelled reset, so it clears the flag-gated state too:
+       otherwise a guest who has already been handed to a person taps it and
+       lands on a card with no questions on it. Back does not clear - Back is
+       navigation, not a reset. Both lines are no-ops with the flag off. */
+    restart.addEventListener('click', function () {
+      tapped = {};
+      exhausted = false;
+      seed();
+      focusFirstOption();
+    });
     root.addEventListener('keydown', function (event) {
       if (event.key === 'Escape' && isOpen) { event.stopPropagation(); close(); }
     });
