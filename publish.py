@@ -438,9 +438,49 @@ def dump(doc, path):
         fh.write('\n')
 
 
-def unified(old_path, new_path):
+def _without_editor_note(lines, label):
+    """Drop the _editorNote line from a JSON dump for comparison purposes.
+
+    _editorNote carries today's date, so it differs on the first run after every
+    UTC midnight even when no content changed. Including it in the changed-vs-
+    unchanged decision produced a nightly no-op deploy, a junk auto-publish
+    commit, and a "Grace published" push - see PUBLISHING.md, 2026-08-29 00:18Z.
+    It is metadata about the build, not content a guest can see, so it is
+    excluded from the comparison on BOTH sides. It is still written to the
+    artifact, so a real deploy always ships a fresh one.
+
+    This filter is LINE-BASED and therefore coupled to dump() writing the
+    artifact with indent=2, which puts _editorNote on exactly one line. If the
+    dump were ever changed to compact JSON the whole document would be one line
+    containing "_editorNote", the filter would drop everything, every run would
+    compare empty-to-empty and report nochange, and deploys would stop silently.
+    The two invariants below turn that into a loud failure instead: an
+    unhandled raise fails the run, which reaches the existing high-priority
+    failure notification. There is deliberately NO fallback to an unfiltered
+    compare - a wrong-but-quiet answer is what we are defending against.
+    """
+    kept = [l for l in lines if '"_editorNote"' not in l]
+    dropped = len(lines) - len(kept)
+    if dropped > 1:
+        raise RuntimeError(
+            f'_editorNote filter dropped {dropped} lines from {label} (expected at '
+            'most 1). The filter is line-based and assumes dump() uses indent=2 so '
+            '_editorNote occupies one line. Did the artifact formatting change?')
+    if lines and not kept:
+        raise RuntimeError(
+            f'_editorNote filter emptied {label} ({len(lines)} line(s) in, 0 out). '
+            'The artifact is probably compact JSON on a single line; the filter is '
+            'line-based and assumes dump() uses indent=2. Refusing to compare '
+            'empty-to-empty, which would report nochange forever and stop deploys.')
+    return kept
+
+
+def unified(old_path, new_path, ignore_editor_note=True):
     old = open(old_path, encoding='utf-8').read().splitlines(keepends=True) if os.path.exists(old_path) else []
     new = open(new_path, encoding='utf-8').read().splitlines(keepends=True)
+    if ignore_editor_note:
+        old = _without_editor_note(old, old_path)
+        new = _without_editor_note(new, new_path)
     return list(difflib.unified_diff(old, new, fromfile=old_path, tofile=new_path, n=2))
 
 

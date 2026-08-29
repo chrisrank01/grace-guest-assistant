@@ -137,8 +137,13 @@ anywhere the Sheet's `→` is expected.
   Destination` cell that names a place in words ("Open the app", "Church Center
   giving") rather than a URL ships *no* link rather than a broken one. Put a real
   URL in the cell and the link appears on the next publish, no code change.
-- **`_editorNote` regenerates every run** and carries the date, so it shows in
-  the diff whenever the date has changed since the last publish.
+- **`_editorNote` regenerates every run** and carries the date, but it is
+  **excluded from the changed-vs-unchanged comparison on both sides**, so a date
+  rollover alone can never produce `deployed` or `would_change`. It is still
+  written to the artifact, so a real deploy always ships a fresh one. This is
+  because of the 2026-08-29 00:18 UTC incident: the first tick after UTC midnight
+  deployed with `_editorNote` as its entire content diff, producing a no-op
+  deploy, a junk auto-publish commit, and a "Grace published" push every night.
 - **Live verification runs twice, cache-busted.** Cloudflare's edge can serve a
   stale copy for a beat after a deploy, and a single probe has returned a false
   negative more than once. Two checks is the rule, by hand as well as in the script.
