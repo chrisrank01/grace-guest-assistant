@@ -600,7 +600,7 @@
             a note written first would be wiped before the guest ever saw it. */
     function enterExhaustion() {
       exhausted = true;
-      select(TALK_PERSON_ID);
+      select(TALK_PERSON_ID, { suppressEcho: true });
 
       var row = el('div', 'row from-church');
       var bubble = el('div', 'bubble is-intro');
@@ -731,7 +731,10 @@
         .then(function () { clearTimeout(timer); });
     }
 
-    function select(id) {
+    /* opts.suppressEcho drops the guest bubble. A tap is a question the guest
+       asked, so it is echoed; the exhaustion handoff is the widget's own move,
+       and echoing 'Talk to a person' there would put words in their mouth. */
+    function select(id, opts) {
       if (id === HOME_ID) { goHome(); return; }
       var node = questions[id];
       if (!node) return;
@@ -743,7 +746,7 @@
 
       /* Clear first - this view is the whole card, not another entry in a log. */
       feed.textContent = '';
-      askedBubble(node.label);
+      if (!(opts && opts.suppressEcho)) askedBubble(node.label);
       answerBubble(node);
 
       var followups = (node.followups || []).filter(function (fid) {
@@ -835,7 +838,12 @@
       window.setTimeout(function () {
         if (!isOpen) panel.classList.remove('is-visible');
       }, 190);
-      launcher.focus({ preventScroll: true });
+      /* Same rule as focusFirstOption: only move focus when the guest is
+         actually driving from the keyboard. Returning focus to the launcher
+         after a tap paints a ring on it in WebKit, as if it had been tabbed to.
+         Keyboard users still get it - closing must not strand focus on a panel
+         that is no longer there. */
+      if (lastInputWasKeyboard) launcher.focus({ preventScroll: true });
     }
 
     launcher.addEventListener('click', function () { isOpen ? close() : open(); });
