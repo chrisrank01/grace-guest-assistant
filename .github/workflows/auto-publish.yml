@@ -33,7 +33,82 @@ permissions:
   contents: write            # to commit the regenerated answers.json
 
 jobs:
+  # ---- backup-defers guard ---------------------------------------------
+  # Every tick currently runs TWICE: the Cloudflare worker dispatches at :17:38
+  # and GitHub's backup cron lands ~3 minutes later. Both do a full Sheet read,
+  # and on a tick that actually deploys they can race - the second run's commit
+  # is rejected non-fast-forward, which shows red and pushes a failure alert for
+  # a publish that already succeeded (see HANDOFF INCIDENT LOG, run #2).
+  #
+  # So the BACKUP stands down when a run has already started recently. Two rules
+  # that look arbitrary and are not:
+  #   - Only `schedule` defers. A workflow_dispatch is the primary clock (or a
+  #     human) and never skips, so this can never suppress a real publish.
+  #   - It defers regardless of how that recent run TURNED OUT. The backup exists
+  #     to cover a clock that never fired, not a publish that failed; a failed
+  #     primary has already sent its own high-priority alert, and re-running it
+  #     here would only duplicate the failure.
+  # 45 min is comfortably above the observed ~3 min pairing gap and well under
+  # the 2h cadence, so a genuinely missed tick always lets the backup through.
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read            # list this workflow's runs; contents not needed
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Backup defers to a recent run
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          WINDOW_MIN: '45'
+          WINDOW_SEC: '2700'
+        run: |
+          set -uo pipefail
+
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "event=${{ github.event_name }} - primary clock, never defers"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The window is computed inside jq (`now`) rather than with `date -d`,
+          # so the same expression runs unchanged on the Ubuntu runner and on a
+          # BSD-date Mac - which is what lets the fixture harness exercise this
+          # exact code instead of a reimplementation of it.
+          RECENT="$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/auto-publish.yml/runs?per_page=50" \
+            --jq '[.workflow_runs[]
+                   | select(.id != (env.RUN_ID | tonumber))
+                   | select(.run_started_at != null)
+                   | select((.run_started_at | fromdateiso8601) > (now - (env.WINDOW_SEC | tonumber)))
+                   | "\(.id) \(.run_started_at) \(.event) \(.status)/\(.conclusion)"] | .[]')" \
+            || RECENT="__API_ERROR__"
+
+          # Fail OPEN. A backup that runs when it did not need to costs one extra
+          # Sheet read and reports nochange; a backup silently suppressed by an
+          # API hiccup loses the tick with nothing to show for it.
+          if [ "$RECENT" = "__API_ERROR__" ]; then
+            echo "could not list runs - failing open, letting the backup proceed"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -n "$RECENT" ]; then
+            echo "$RECENT" | sed 's/^/  recent run: /'
+            LINE="RESULT status=skipped_duplicate reason=recent_run"
+            echo "$LINE"
+            echo "$LINE" >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no run started in the last ${WINDOW_MIN}m - backup proceeding"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   publish:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -149,6 +224,35 @@ jobs:
             -H "Priority: default" \
             -H "Tags: white_check_mark" \
             -d "$RESULT_LINE · $(date -u '+%H:%M UTC')" \
+            "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null || true
+
+      # Min priority lists silently and never buzzes, so this is not a message
+      # you read - it is a message whose ABSENCE you notice. A day with no line
+      # means the clock, the workflow or the ntfy topic died, which is the one
+      # failure mode nothing else here catches (HANDOFF, "Known gap": a clock
+      # that never fires raises no alarm).
+      # Once a day: the primary clock dispatches on even hours, so hour 12 UTC
+      # matches exactly one dispatch (12:17) per day. The hour is checked in the
+      # shell because workflow expressions have no access to the current time.
+      - name: Daily heartbeat
+        if: >-
+          success() &&
+          github.event_name == 'workflow_dispatch' &&
+          (inputs.simulate == 'none' || inputs.simulate == '')
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RESULT_LINE: ${{ steps.publish.outputs.result_line }}
+        run: |
+          HOUR="$(date -u '+%H')"
+          if [ "$HOUR" != "12" ]; then
+            echo "hour $HOUR UTC - not the heartbeat hour, nothing sent"
+            exit 0
+          fi
+          curl -s -m 20 \
+            -H "Title: Daily heartbeat" \
+            -H "Priority: min" \
+            -H "Tags: green_heart" \
+            -d "${RESULT_LINE:-RESULT status=unknown} · $(date -u '+%Y-%m-%d %H:%M UTC')" \
             "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null || true
 
       - name: Remove the key
