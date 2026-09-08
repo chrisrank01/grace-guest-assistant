@@ -20,15 +20,42 @@ they live; it never reproduces one.
 | Branded host | `https://assistant.discovergrace.ai` | Primary. CNAME `assistant` → `grace-assistant.pages.dev`, proxied, in the `discovergrace.ai` zone |
 | Pages project | `https://grace-assistant.pages.dev` | Same files, byte-identical. Cloudflare Pages project `grace-assistant` |
 
-Serves three files plus `_headers`:
+Serves four files plus `_headers` and a `fonts/` directory:
 
 - `grace-assistant.js` — the whole widget. Vanilla JS, no dependencies, no build
   step. Renders inside a shadow root with `:host { all: initial }`, so the host
   page's CSS cannot reach in and the widget cannot leak out.
 - `answers.json` — all guest-visible content. **Generated. Never hand-edit.**
 - `test.html` — a local mock harness. **Remove from the production origin at
-  handoff** (see checklist).
-- `_headers` — `X-Robots-Tag: noindex` on everything.
+  handoff** (see checklist). Note Pages strips the extension, so it is live at
+  `/test` as well as `/test.html`.
+- `fonts/QuincyCF-Medium.woff2` — 36,692 bytes. **The widget does ship one font.**
+  Every other family is pinned to a face Grace already registers document-wide,
+  but Quincy Medium is not among them (discovergrace.com serves Quincy *Black*
+  only), so naming it without shipping it would have fallen back silently.
+  Added 2026-09-07, converted from Grace's licensed `QuincyCF-Medium.otf`.
+- `_headers` — `X-Robots-Tag: noindex` on everything, plus
+  `Access-Control-Allow-Origin: *` on `/fonts/*`.
+
+**Why the font needs a CORS header.** The widget is embedded cross-origin by
+design, and browsers fetch fonts in CORS mode whatever the markup says. Without
+that header the file is blocked and the heading falls back to quincy-black with
+no console error. Cloudflare Pages happens to send `Access-Control-Allow-Origin: *`
+on static assets by default, so this worked before the rule existed — the rule is
+there so the requirement is stated rather than inherited from a platform default
+that could change.
+
+**The `@font-face` lives in `document.head`, NOT in the shadow root.** This looks
+like a violation of the widget's own encapsulation rule and is deliberate:
+Chromium and WebKit **ignore `@font-face` declared inside a shadow root**. The
+family still resolves, the file is simply never fetched, and the text renders in
+the fallback with no error of any kind. This was not assumed — it was proven on
+2026-09-07 with a named probe: the identical face was injected into the shadow
+root under the family `shadow-scoped-probe` and measured at exactly the monospace
+baseline (1127.05px), while the same file declared in `document.head` measured
+872.13px. One `<style>` element carrying one rule is the entire exception;
+everything visual stays inside the shadow root. **Do not "fix" this by moving the
+rule back.**
 
 **Default-hide contract:** `answers.json` has no `default` route key, so the
 widget renders *nothing at all* on any page not explicitly listed. Adding a page
@@ -39,7 +66,16 @@ is a content change, not a code change.
 `https://grace-assistant-router.relax-tech.workers.dev` (source: `worker/`)
 
 Takes `POST {page, tappedId, history, candidateIds}` and returns `{"ids":[…]}` —
-at most 3, always HTTP 200. Model `claude-haiku-4-5-20251001`, ~$0.0003/call.
+at most 3, always HTTP 200. Model `claude-haiku-4-5`, ~$0.0003/call.
+
+**That is the alias, not a dated snapshot.** `DEFAULT_MODEL` in
+`worker/src/index.js` is `'claude-haiku-4-5'`, and no `MODEL` variable is bound on
+the Worker, so the alias is what runs. The implication is worth stating plainly:
+Anthropic can repoint the alias, so the model backing this Worker can change
+without anyone deploying anything. That is an accepted trade — the Worker is a
+ranking enhancement whose every failure path already degrades to the widget's
+static follow-ups — but if a pinned model is ever wanted, bind `MODEL` to a dated
+id rather than editing the default.
 
 **It is an enhancement, never a dependency.** If it is slow, broken, or deleted,
 the widget shows its static follow-up chips and the guest notices nothing. This is
@@ -87,7 +123,9 @@ pilot decision.**
 
 ### Source of truth — the Sheet
 
-**grace-assistant-corpus**, Drive fileId `1uxB85U-lRTZo75eGdmB23PAvJ2jdyLvvezaQIzaaekY`
+**grace-assistant-corpus-2026-08-27** (that is the file's actual title — searching
+Drive for "grace-assistant-corpus" alone will not find it), Drive fileId
+`1uxB85U-lRTZo75eGdmB23PAvJ2jdyLvvezaQIzaaekY`
 
 Five tabs: `READ ME`, `ANSWERS`, `PLACEMENT`, `FLAGS`, `CHANGE LOG`.
 
@@ -144,9 +182,30 @@ ntfy push
 Deliberately **not** alerted: `status=nochange` and `status=debounced`. Both are
 healthy, and alerting on them trains you to ignore the channel.
 
-**Known gap:** a clock that never fires produces no failed run and therefore no
-alert. The Worker closes that hole for GitHub's scheduler; nothing yet watches the
-Worker itself. A "no successful publish in N hours" check is the missing piece.
+**Known gap, narrowed 2026-08-30.** A clock that never fires produces no failed
+run and therefore no alert. The Worker closes that hole for GitHub's scheduler,
+and a **daily heartbeat** now covers the Worker itself: on the primary dispatch at
+hour 12 UTC the workflow sends the `RESULT` line to ntfy at `Priority: min`, which
+lists silently and never buzzes. It is not a message to read — it is one whose
+*absence* is the signal.
+
+What it covers: the whole chain being dead for a day. If the Worker stops
+dispatching, the workflow stops running, or the ntfy topic breaks, the daily line
+stops appearing.
+
+What it does **not** cover, and why the gap is narrowed rather than closed:
+
+- **Latency.** Detection takes up to 24 hours. A clock that dies at 13:00 UTC goes
+  unnoticed until the following midday.
+- **It is a pull, not a push.** Nothing alerts on the absence; a person has to
+  notice a quiet line missing from a quiet channel. That is a weak signal by
+  design, but it is a weak signal.
+- **Partial failure.** It fires on a successful run of any kind, so a pipeline
+  that runs and reports `nochange` every time because the Sheet read silently
+  returns nothing would still heartbeat happily.
+
+A genuine "no successful publish in N hours" watchdog — something that alerts on
+the absence rather than reporting on the presence — is still the missing piece.
 
 ---
 
@@ -328,7 +387,10 @@ widget still works — chips just stay in their static order, silently.
 
 **The scheduler that never fired (2026-08-27 → 28).** The auto-publish workflow was
 pushed with a `schedule: '17 */2 * * *'` trigger. Over the following 16 hours it
-fired **zero** times — nine consecutive missed ticks. Every possible
+fired **zero** times — **seven** consecutive missed ticks. (This document said
+"nine" until 2026-09-08. At a two-hour cadence sixteen hours cannot contain nine
+ticks; seven is the figure in PUBLISHING.md and in the workflow's own header
+comment, and it is the correct one.) Every possible
 misconfiguration was checked and ruled out from the machine: workflow `state=active`,
 file present on the default branch, Actions enabled with `allowed_actions: all`,
 public non-fork repo, valid cron. Nothing was wrong; GitHub's hosted scheduler is

@@ -267,6 +267,7 @@ def build(sh):
     _, rows = tabulate(sh.worksheet('ANSWERS').get_all_values())
 
     questions, by_id, drafts, skipped = {}, {}, 0, 0
+    out_of_scope = {}   # page value -> how many rows it dropped
     page_slugs = {}
     seen_ids = set()
     shippable = {fold(x) for x in SHIP_STATUSES}
@@ -284,6 +285,7 @@ def build(sh):
         in_scope = fold(page) in page_to_route or slug == TALK_PERSON_SLUG
         if not in_scope:
             skipped += 1
+            out_of_scope[page or '(blank)'] = out_of_scope.get(page or '(blank)', 0) + 1
             continue
         if fold(status) not in shippable:
             warn(f'{rid} ({slug}): status {status or "(blank)"} - not shipped')
@@ -322,7 +324,30 @@ def build(sh):
 
     if FATAL:
         die(FATAL)
-    say(f'  in scope: {len(questions)} questions   out of scope: {skipped} rows')
+    # Out-of-scope rows used to vanish without a line anyone could see: the old
+    # summary went through say(), which --quiet suppresses, and CI always runs
+    # --quiet. So the single largest reason a row does not ship was invisible in
+    # exactly the place people go looking. print() instead of say(), because a
+    # count of what was dropped is not chatter.
+    print(f'  in scope: {len(questions)} questions   '
+          f'out of scope: {skipped} rows (Page is not a pilot page)')
+    for pg, n in sorted(out_of_scope.items(), key=lambda kv: (-kv[1], kv[0])):
+        print(f'    {n:3} row(s)  Page={pg!r}')
+
+    # NEAR-MISS. fold() is trim + casefold, so case and outer spaces already
+    # match. What still bites is whitespace fold() cannot see - a double space,
+    # a non-breaking space pasted in from elsewhere - which looks identical in
+    # the cell and silently drops the row. Squash all of that and re-test; if it
+    # would then match a pilot page, the row is one invisible character away
+    # from shipping and that is worth a warning, not a log line.
+    def _squash(v):
+        return re.sub(r'\s+', ' ', v.replace('\u00a0', ' ')).strip().casefold()
+    pilot_squashed = {_squash(cfg['page']): cfg['page'] for cfg in routes_cfg.values()}
+    for pg in out_of_scope:
+        hit = pilot_squashed.get(_squash(pg))
+        if hit is not None:
+            warn(f'Page {pg!r} is one whitespace difference from the pilot page '
+                 f'{hit!r} - {out_of_scope[pg]} row(s) dropped. Retype the cell.')
     if drafts:
         warn(f'{drafts} DRAFT row(s) shipped - SHIP_STATUSES currently allows DRAFT')
 
@@ -475,6 +500,31 @@ def _without_editor_note(lines, label):
     return kept
 
 
+def count_changes(old_path, new_doc):
+    """How many distinct things this publish alters, for the RESULT line.
+
+    `changed` used to be hardcoded to 1 - a flag wearing a count's name, so a
+    publish that rewrote six answers and a publish that fixed one typo both
+    reported changed=1. The field is in the ntfy body, so that number is what a
+    reader sees at 2am; it should mean something.
+
+    One unit = one question added, removed or edited, one route whose config
+    differs, or the meta block. _editorNote is excluded, exactly as it is from
+    the unified() gate that decides whether to deploy at all - so any publish
+    that gets this far counts at least 1, and changed=0 is unreachable.
+    """
+    if not os.path.exists(old_path):
+        return len(new_doc.get('questions', {})) + len(new_doc.get('routes', {})) + 1
+    old = json.load(open(old_path, encoding='utf-8'))
+    oq, nq = old.get('questions', {}), new_doc.get('questions', {})
+    n = sum(1 for slug in set(oq) | set(nq) if oq.get(slug) != nq.get(slug))
+    orte, nrte = old.get('routes', {}), new_doc.get('routes', {})
+    n += sum(1 for path in set(orte) | set(nrte) if orte.get(path) != nrte.get(path))
+    if old.get('meta') != new_doc.get('meta'):
+        n += 1
+    return n
+
+
 def unified(old_path, new_path, ignore_editor_note=True):
     old = open(old_path, encoding='utf-8').read().splitlines(keepends=True) if os.path.exists(old_path) else []
     new = open(new_path, encoding='utf-8').read().splitlines(keepends=True)
@@ -590,14 +640,16 @@ def main():
             say('\ndry run - public/ untouched, nothing deployed.')
         return
 
+    changed = count_changes(OUT_PUBLIC, doc)
+
     if args.deploy:
         say('\n=== DEPLOYING ===')
         deploy()
         result(status='deployed', questions=len(doc['questions']),
-               warnings=len(WARNINGS), changed=1)
+               warnings=len(WARNINGS), changed=changed)
     else:
         result(status='would_change', questions=len(doc['questions']),
-               warnings=len(WARNINGS), changed=1)
+               warnings=len(WARNINGS), changed=changed)
         say('\ndry run - public/ untouched, nothing deployed. Use --deploy to ship.')
 
 

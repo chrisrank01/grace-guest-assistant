@@ -105,6 +105,34 @@ there:
 Add `--quiet` for machine-readable output (a single `RESULT ...` line plus
 warnings), which is what the workflow uses.
 
+### REQUIRED before ANY hand deploy
+
+Run this first, every time, whether you are shipping content or a widget change:
+
+```
+git fetch origin && git diff --quiet origin/main -- public/answers.json \
+  && echo "GUARD PASS" || echo "GUARD FAIL - do not deploy"
+```
+
+**Why.** `wrangler pages deploy public` uploads the *whole directory*, not a diff.
+Anything stale sitting in `public/` rides along and overwrites what is live, even
+if you never touched it.
+
+This is not hypothetical. On **2026-09-08** a hand deploy of a widget change also
+shipped a week-old `public/answers.json`, silently reverting two of T's published
+copy edits — "make arrival simple" back to "make arrival easy", and "GraceKids!"
+back to "GraceKids". They were live for roughly twenty minutes. Nothing detected
+it: the deploy verified its own md5 and passed, because the file it shipped was
+exactly the file it meant to ship. It surfaced only because the follow-up
+`git push` was rejected as non-fast-forward.
+
+The same hazard runs the other way. While a hand-authored widget change sits
+uncommitted, the next content publish checks out `main` and deploys *its* copy of
+`public/`, silently reverting the widget. `publish.py` only deploys when
+`answers.json` actually changed, so the revert waits for the next Sheet edit
+rather than the next tick — which makes it less likely to be noticed, not more.
+**Commit and push a hand deploy in the same session that made it.**
+
 ## What the validator refuses
 
 Any of these fails the run with **exit 2 and nothing written** — the deploy does

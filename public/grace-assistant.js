@@ -53,6 +53,10 @@
 
   var NAVY = '#282E39';
   var ORANGE = '#FF5500';
+  /* The mark's own orange, from T's Grace_Logo.svg. Deliberately NOT the UI
+     accent: it is used for the launcher badge and the header dots and nothing
+     else. Buttons, focus rings, borders and carets stay on ORANGE. */
+  var LOGO_ORANGE = '#F15822';
   var CREAM = '#FAFAF7';
   var RADIUS = '4px';
 
@@ -61,7 +65,8 @@
 
   /* Grace registers these families document-wide (useanyfont + Typekit).
      Naming them here lights the widget up on discovergrace.com and the demo
-     clones; everywhere else the fallbacks carry it. No font files shipped.
+     clones; everywhere else the fallbacks carry it. One font IS shipped -
+     quincy-medium, see FONT_FACE below; the rest are Grace's own registrations.
      'greyclif-regular' is spelled with one f in Grace's own CSS - verbatim. */
   /* Font pinning. Grace registers five faces via useanyfont; ONE of them is a
      trial cut - 4619Greycliff-CF.woff2 reports family 'FSP DEMO - Greycliff CF'
@@ -120,13 +125,21 @@
   /* Markup                                                              */
   /* ------------------------------------------------------------------ */
 
+  /* Grace's mark, geometry lifted verbatim from design/Grace_Logo.svg (T
+     Munroe). Her file draws the dots on a filled #F15822 circle of r=72, which
+     fills the 144 viewBox exactly. The widget renders the mark in two contexts -
+     white dots on an orange badge, and orange dots on cream with no badge - so
+     only the five dots are reproduced here and the circle is left to CSS.
+     No fill attribute: the fill comes from the stylesheet, per context.
+     The centre dot's cx is 72.12, not 72. That 0.12 offset is in her artwork
+     and is kept as drawn rather than tidied. */
   var CROSS_SVG =
-    '<svg viewBox="0 0 44 44" aria-hidden="true" focusable="false">' +
-      '<circle cx="22" cy="8"  r="4"/>' +
-      '<circle cx="12" cy="20" r="4"/>' +
-      '<circle cx="22" cy="20" r="4"/>' +
-      '<circle cx="32" cy="20" r="4"/>' +
-      '<circle cx="22" cy="32" r="4"/>' +
+    '<svg viewBox="0 0 144 144" aria-hidden="true" focusable="false">' +
+      '<circle cx="72.12"  cy="72"     r="9.67"/>' +
+      '<circle cx="100.88" cy="72"     r="9.67"/>' +
+      '<circle cx="43.12"  cy="72"     r="9.67"/>' +
+      '<circle cx="72"     cy="100.88" r="9.67"/>' +
+      '<circle cx="72"     cy="43.12"  r="9.67"/>' +
     '</svg>';
 
   var CLOSE_SVG =
@@ -191,7 +204,7 @@
     '}',
     '.launcher-bug {',
     '  width: 60px; height: 60px; border-radius: 50%; flex: none;',
-    '  background: ' + ORANGE + '; color: #FFFFFF;',
+    '  background: ' + LOGO_ORANGE + '; color: #FFFFFF;',
     '  display: flex; align-items: center; justify-content: center;',
     '  box-shadow: 0 6px 20px rgba(40, 46, 57, 0.28);',
     '  transition: box-shadow 140ms ease;',
@@ -204,7 +217,11 @@
     '.launcher:active .launcher-pill { transform: translateY(1px); }',
     '.launcher:focus-visible .launcher-bug { outline: 3px solid ' + NAVY + '; outline-offset: 3px; }',
     '.launcher:focus-visible .launcher-pill { outline: 2px solid ' + NAVY + '; outline-offset: 2px; }',
-    '.launcher-bug svg { width: 40px; height: 40px; fill: #FFFFFF; }',
+    /* In Grace_Logo.svg the badge circle IS the viewBox (r=72 of 144), so
+       setting the svg box to the badge diameter reproduces her proportion
+       exactly: the glyph spans 77.1 of 144 units, so 60px x 77.1/144 = 32.13px,
+       53.5% of the 60px badge - her ratio, not an eyeballed one. */
+    '.launcher-bug svg { width: 60px; height: 60px; fill: #FFFFFF; }',
     '.launcher .icon-close { width: 24px; height: 24px; }',
 
     /* ---- panel ---- */
@@ -236,8 +253,13 @@
     '  border-bottom: 1px solid rgba(40, 46, 57, 0.10);',
     '  background: ' + CREAM + ';',
     '}',
-    '.mark { width: 22px; height: 22px; flex: none; }',
-    '.mark svg { width: 22px; height: 22px; fill: ' + ORANGE + '; display: block; }',
+    /* No badge behind the header mark, so the 53.5%-of-circle ratio is
+       meaningless here and the box is sized for visual weight instead. The old
+       mark was an asymmetric plus: 16.0px tall x 14.0px wide. The new glyph is
+       square, so 28px x 77.1/144 = 15.0px sits inside that old envelope on both
+       axes rather than matching one and overshooting the other. */
+    '.mark { width: 28px; height: 28px; flex: none; }',
+    '.mark svg { width: 28px; height: 28px; fill: ' + LOGO_ORANGE + '; display: block; }',
     '.head-text { flex: 1 1 auto; min-width: 0; }',
     '.head-title { font-family: ' + SERIF + '; font-size: 21px; line-height: 1;',
     '  font-weight: 400; letter-spacing: 0; }',
