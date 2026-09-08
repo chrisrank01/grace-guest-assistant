@@ -216,7 +216,11 @@
     '  display: none; flex-direction: column; overflow: hidden;',
     '  width: 372px; max-width: calc(100vw - 32px);',
     '  height: 560px; max-height: calc(100vh - 132px);',
-    '  background: ' + CREAM + '; border-radius: ' + RADIUS + ';',
+    /* PROPOSED VALUE, pending T's approval. Grace's system defines only two
+       corner tokens - 4px and the pill/999px - and 16px sits between them,
+       belonging to neither. It is written as a literal here rather than added
+       to the token set so that approving or reverting it touches one line. */
+    '  background: ' + CREAM + '; border-radius: 16px;',
     '  border: 1px solid rgba(40, 46, 57, 0.10);',
     '  box-shadow: 0 18px 48px rgba(40, 46, 57, 0.22);',
     '  opacity: 0; transform: translateY(10px);',
@@ -347,7 +351,9 @@
     '.pin-btn {',
     '  flex: 1 1 0; font: inherit; font-family: ' + SANS_MED + '; font-weight: 500;',
     '  font-size: 13.5px;',
-    '  border-radius: ' + RADIUS + '; padding: 10px 12px; cursor: pointer;',
+    /* Pill, matching .chip. One class styles both pinned buttons and they
+       share a row, so Back and Talk to a person go pill together. */
+    '  border-radius: 999px; padding: 10px 12px; cursor: pointer;',
     '  background: #FFFFFF; color: ' + NAVY + ';',
     '  border: 1px solid rgba(40, 46, 57, 0.22);',
     '  -webkit-tap-highlight-color: transparent;',
