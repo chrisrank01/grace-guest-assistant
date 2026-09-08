@@ -1,2 +1,10 @@
 /*
   X-Robots-Tag: noindex
+
+# The widget is embedded cross-origin by design - the script and this font are
+# served from assistant.discovergrace.ai / grace-assistant.pages.dev while the
+# page is discovergrace.com or grace-demo.pages.dev. Fonts are ALWAYS fetched in
+# CORS mode, whatever the markup says, so without this the browser blocks the
+# file and the heading silently falls back to quincy-black with no console error.
+/fonts/*
+  Access-Control-Allow-Origin: *

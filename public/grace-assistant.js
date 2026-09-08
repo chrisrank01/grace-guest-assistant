@@ -23,6 +23,15 @@
 
   var ANSWERS_URL = script.getAttribute('data-answers') || 'answers.json';
 
+  /* Directory this script was served from, absolute. The one shipped font is
+     fetched relative to THIS file, not to the host page: a url() inside the
+     widget stylesheet resolves against the host document, so on
+     discovergrace.com a relative path would look for the font on Grace's own
+     server and quietly 404 into the fallback. */
+  var ASSET_BASE = (function () {
+    try { return new URL('.', script.src).href; } catch (e) { return ''; }
+  })();
+
   /* Optional follow-up ranking service. Empty string = never called, and the
      widget behaves exactly as it did before this existed. */
   var ROUTER_URL = script.getAttribute('data-router') || '';
@@ -42,8 +51,8 @@
   var EXHAUSTION_NOTE =
     'That covers everything I can answer here. Want to talk with a real person?';
 
-  var NAVY = '#292E38';
-  var ORANGE = '#FF5400';
+  var NAVY = '#282E39';
+  var ORANGE = '#FF5500';
   var CREAM = '#FAFAF7';
   var RADIUS = '4px';
 
@@ -69,7 +78,7 @@
      stays at 500 so browsers do not synthesise bold on top of an already-bold
      file. Off Grace's site all of these fall through to the system stack. */
   var SYSTEM = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-  var SERIF  = "'quincy-black', Georgia, 'Times New Roman', serif";
+  var SERIF  = "'quincy-medium', 'quincy-black', 'Times New Roman', serif";
   var SANS   = "'greyclif-regular', " + SYSTEM;
   var SANS_MED = "'greycliff-demi', 'greycliff-bold', 'greyclif-regular', " + SYSTEM;
 
@@ -126,6 +135,21 @@
       'stroke-width="2.4" stroke-linecap="round"/>' +
     '</svg>';
 
+  /* The only face the widget ships. Everything else is pinned to families
+     Grace already registers document-wide; Quincy Medium is not among them
+     (discovergrace.com serves Quincy Black only), so naming it alone would
+     fall back silently. No font-weight descriptor, matching how Grace's own
+     @font-face blocks are written - every face is its own weight-400 family,
+     which is why the stack switches family for emphasis rather than weight. */
+  var FONT_FACE = [
+    '@font-face {',
+    "  font-family: 'quincy-medium';",
+    "  src: url('" + ASSET_BASE + "fonts/QuincyCF-Medium.woff2') format('woff2');",
+    '  font-style: normal;',
+    '  font-display: swap;',
+    '}'
+  ].join('\n');
+
   var CSS = [
     ':host { all: initial; }',
     '*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }',
@@ -163,13 +187,13 @@
     '  background: #FFFFFF; color: ' + NAVY + '; border-radius: 999px;',
     '  font-family: ' + SANS_MED + '; padding: 9px 16px; font-size: 11px; font-weight: 500;',
     '  letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap;',
-    '  box-shadow: 0 2px 8px rgba(41, 46, 56, 0.15);',
+    '  box-shadow: 0 2px 8px rgba(40, 46, 57, 0.15);',
     '}',
     '.launcher-bug {',
     '  width: 60px; height: 60px; border-radius: 50%; flex: none;',
     '  background: ' + ORANGE + '; color: #FFFFFF;',
     '  display: flex; align-items: center; justify-content: center;',
-    '  box-shadow: 0 6px 20px rgba(41, 46, 56, 0.28);',
+    '  box-shadow: 0 6px 20px rgba(40, 46, 57, 0.28);',
     '  transition: box-shadow 140ms ease;',
     '}',
     '.launcher:focus { outline: none; }',
@@ -180,7 +204,7 @@
     '.launcher:active .launcher-pill { transform: translateY(1px); }',
     '.launcher:focus-visible .launcher-bug { outline: 3px solid ' + NAVY + '; outline-offset: 3px; }',
     '.launcher:focus-visible .launcher-pill { outline: 2px solid ' + NAVY + '; outline-offset: 2px; }',
-    '.launcher-bug svg { width: 30px; height: 30px; fill: #FFFFFF; }',
+    '.launcher-bug svg { width: 40px; height: 40px; fill: #FFFFFF; }',
     '.launcher .icon-close { width: 24px; height: 24px; }',
 
     /* ---- panel ---- */
@@ -193,8 +217,8 @@
     '  width: 372px; max-width: calc(100vw - 32px);',
     '  height: 560px; max-height: calc(100vh - 132px);',
     '  background: ' + CREAM + '; border-radius: ' + RADIUS + ';',
-    '  border: 1px solid rgba(41, 46, 56, 0.10);',
-    '  box-shadow: 0 18px 48px rgba(41, 46, 56, 0.22);',
+    '  border: 1px solid rgba(40, 46, 57, 0.10);',
+    '  box-shadow: 0 18px 48px rgba(40, 46, 57, 0.22);',
     '  opacity: 0; transform: translateY(10px);',
     '  transition: opacity 170ms ease, transform 170ms ease;',
     '}',
@@ -205,7 +229,7 @@
     '.head {',
     '  display: flex; align-items: center; gap: 10px; flex: none;',
     '  padding: 14px 14px 12px 16px;',
-    '  border-bottom: 1px solid rgba(41, 46, 56, 0.10);',
+    '  border-bottom: 1px solid rgba(40, 46, 57, 0.10);',
     '  background: ' + CREAM + ';',
     '}',
     '.mark { width: 22px; height: 22px; flex: none; }',
@@ -215,7 +239,7 @@
     '  font-weight: 400; letter-spacing: 0; }',
     '.head-sub { font-family: ' + SANS_MED + '; font-size: 9.5px; font-weight: 500;',
     '  letter-spacing: 0.14em;',
-    '  text-transform: uppercase; color: rgba(41, 46, 56, 0.55); margin-top: 3px; }',
+    '  text-transform: uppercase; color: rgba(40, 46, 57, 0.55); margin-top: 3px; }',
     /* route title, now a body heading above the intro */
     '.route-heading { font-family: ' + SERIF + '; font-size: 24px; line-height: 1.15;',
     '  font-weight: 400; color: ' + NAVY + '; padding: 2px 2px 2px; }',
@@ -225,7 +249,7 @@
     '  display: flex; align-items: center; justify-content: center;',
     '  -webkit-tap-highlight-color: transparent;',
     '}',
-    '.close:active { background: rgba(41, 46, 56, 0.10); }',
+    '.close:active { background: rgba(40, 46, 57, 0.10); }',
     '.close:focus-visible { outline: 2px solid ' + ORANGE + '; outline-offset: 1px; }',
     '.close svg { width: 18px; height: 18px; }',
 
@@ -235,7 +259,7 @@
        Nothing inside has its own overflow, so nothing can clip. */
     '.scroll {',
     '  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;',
-    '  scrollbar-width: thin; scrollbar-color: rgba(41, 46, 56, 0.28) transparent;',
+    '  scrollbar-width: thin; scrollbar-color: rgba(40, 46, 57, 0.28) transparent;',
     /* Cosmetic breathing room only. The pinned row and footer are flex siblings
        below this box, not an overlay, so nothing here needs to clear them. */
     '  padding-bottom: 16px;',
@@ -250,9 +274,9 @@
     '.scroll::-webkit-scrollbar { width: 6px; }',
     '.scroll::-webkit-scrollbar-track { background: transparent; }',
     '.scroll::-webkit-scrollbar-thumb {',
-    '  background: rgba(41, 46, 56, 0.28); border-radius: 999px;',
+    '  background: rgba(40, 46, 57, 0.28); border-radius: 999px;',
     '}',
-    '.scroll::-webkit-scrollbar-thumb:hover { background: rgba(41, 46, 56, 0.42); }',
+    '.scroll::-webkit-scrollbar-thumb:hover { background: rgba(40, 46, 57, 0.42); }',
     '.feed {',
     '  flex: none; overflow: visible;',
     '  padding: 16px; display: flex; flex-direction: column; gap: 12px;',
@@ -264,7 +288,7 @@
     '.from-guest .bubble { background: ' + NAVY + '; color: ' + CREAM + '; }',
     '.from-church .bubble {',
     '  background: #FFFFFF; color: ' + NAVY + ';',
-    '  border: 1px solid rgba(41, 46, 56, 0.12);',
+    '  border: 1px solid rgba(40, 46, 57, 0.12);',
     '}',
     '.bubble p + p { margin-top: 9px; }',
     /* Answer links render as a stacked pair: links[0] is the primary action,
@@ -278,15 +302,15 @@
     '  transition: background 120ms ease, border-color 120ms ease;',
     '}',
     '.bubble a.primary { background: ' + ORANGE + '; color: #FFFFFF; border: 1px solid ' + ORANGE + '; }',
-    '.bubble a.secondary { background: #FFFFFF; color: ' + NAVY + '; border: 1px solid rgba(41, 46, 56, 0.28); }',
+    '.bubble a.secondary { background: #FFFFFF; color: ' + NAVY + '; border: 1px solid rgba(40, 46, 57, 0.28); }',
     '.bubble a.primary:active { background: #E04A00; border-color: #E04A00; }',
-    '.bubble a.secondary:active { background: rgba(41, 46, 56, 0.06); }',
+    '.bubble a.secondary:active { background: rgba(40, 46, 57, 0.06); }',
     '.bubble a:focus-visible { outline: 2px solid ' + NAVY + '; outline-offset: 2px; }',
     '.links { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }',
     '.link-wrap { display: flex; flex-direction: column; gap: 3px; }',
-    '.link-caption { font-size: 11px; color: rgba(41, 46, 56, 0.55); padding: 0 2px;',
+    '.link-caption { font-size: 11px; color: rgba(40, 46, 57, 0.55); padding: 0 2px;',
     '  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
-    '.intro { font-size: 13px; color: rgba(41, 46, 56, 0.66); padding: 2px 2px 0; }',
+    '.intro { font-size: 13px; color: rgba(40, 46, 57, 0.66); padding: 2px 2px 0; }',
     '.bubble.is-intro { font-size: 15px; line-height: 1.5; }',
 
     /* ---- options ---- */
@@ -297,14 +321,14 @@
     '}',
     '.options-label {',
     '  font-family: ' + SANS_MED + '; font-size: 11px; font-weight: 500; letter-spacing: 0.07em;',
-    '  text-transform: uppercase; color: rgba(41, 46, 56, 0.5); margin-bottom: 2px;',
+    '  text-transform: uppercase; color: rgba(40, 46, 57, 0.5); margin-bottom: 2px;',
     '}',
     '.chip {',
     '  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;',
     '  font: inherit; font-family: ' + SANS_MED + '; font-weight: 500;',
     '  font-size: 14.5px; color: ' + NAVY + '; cursor: pointer;',
-    '  background: #FFFFFF; border: 1px solid rgba(41, 46, 56, 0.16);',
-    '  border-radius: ' + RADIUS + '; padding: 10px 12px;',
+    '  background: #FFFFFF; border: 1px solid rgba(40, 46, 57, 0.16);',
+    '  border-radius: 999px; padding: 10px 12px;',
     '  transition: border-color 120ms ease, background 120ms ease;',
     '  -webkit-tap-highlight-color: transparent;',
     '}',
@@ -312,34 +336,34 @@
     '.chip:focus-visible { outline: 2px solid ' + ORANGE + '; outline-offset: 1px; }',
     '.chip .text { flex: 1 1 auto; }',
     '.chip .caret { flex: none; color: ' + ORANGE + '; font-size: 17px; line-height: 1; }',
-    '.chip.ghost { background: transparent; border-style: dashed; color: rgba(41, 46, 56, 0.72); }',
-    '.chip.ghost:active { background: rgba(255, 84, 0, 0.09); }',
+    '.chip.ghost { background: transparent; border-style: dashed; color: rgba(40, 46, 57, 0.72); }',
+    '.chip.ghost:active { background: rgba(255, 85, 0, 0.09); }',
 
     /* ---- pinned action row ---- */
     '.pinned {',
     '  flex: none; display: flex; gap: 8px; padding: 10px 16px 12px;',
-    '  border-top: 1px solid rgba(41, 46, 56, 0.10); background: ' + CREAM + ';',
+    '  border-top: 1px solid rgba(40, 46, 57, 0.10); background: ' + CREAM + ';',
     '}',
     '.pin-btn {',
     '  flex: 1 1 0; font: inherit; font-family: ' + SANS_MED + '; font-weight: 500;',
     '  font-size: 13.5px;',
     '  border-radius: ' + RADIUS + '; padding: 10px 12px; cursor: pointer;',
     '  background: #FFFFFF; color: ' + NAVY + ';',
-    '  border: 1px solid rgba(41, 46, 56, 0.22);',
+    '  border: 1px solid rgba(40, 46, 57, 0.22);',
     '  -webkit-tap-highlight-color: transparent;',
     '  transition: background 120ms ease, border-color 120ms ease;',
     '}',
     '.pin-btn.person { border-color: ' + ORANGE + '; color: ' + ORANGE + '; }',
-    '.pin-btn:active { background: rgba(41, 46, 56, 0.06); }',
-    '.pin-btn.person:active { background: rgba(255, 84, 0, 0.08); }',
+    '.pin-btn:active { background: rgba(40, 46, 57, 0.06); }',
+    '.pin-btn.person:active { background: rgba(255, 85, 0, 0.08); }',
     '.pin-btn:focus-visible { outline: 2px solid ' + ORANGE + '; outline-offset: 1px; }',
 
     /* ---- footer ---- */
     '.foot {',
     '  flex: none; display: flex; align-items: center; justify-content: space-between;',
     '  gap: 10px; padding: 9px 16px calc(11px + env(safe-area-inset-bottom, 0px));',
-    '  border-top: 1px solid rgba(41, 46, 56, 0.10);',
-    '  font-size: 11.5px; color: rgba(41, 46, 56, 0.55);',
+    '  border-top: 1px solid rgba(40, 46, 57, 0.10);',
+    '  font-size: 11.5px; color: rgba(40, 46, 57, 0.55);',
     '}',
     '.restart {',
     '  font: inherit; font-size: 11.5px; font-weight: 600; color: ' + ORANGE + ';',
@@ -347,7 +371,7 @@
     '  padding: 3px 5px; cursor: pointer;',
     '  -webkit-tap-highlight-color: transparent;',
     '}',
-    '.restart:active { background: rgba(255, 84, 0, 0.12); }',
+    '.restart:active { background: rgba(255, 85, 0, 0.12); }',
     '.restart:focus-visible { outline: 2px solid ' + ORANGE + '; outline-offset: 1px; }',
 
     /* ---- small screens ---- */
@@ -387,16 +411,16 @@
        these rules at all - nothing to stick. :active and :focus-visible are
        deliberately outside this block; both self-clear. */
     '@media (hover: hover) {',
-    '  .launcher:hover .launcher-bug { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(41, 46, 56, 0.32); }',
+    '  .launcher:hover .launcher-bug { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(40, 46, 57, 0.32); }',
     '  .launcher:hover .launcher-pill { transform: translateY(-2px); }',
-    '  .close:hover { background: rgba(41, 46, 56, 0.07); }',
+    '  .close:hover { background: rgba(40, 46, 57, 0.07); }',
     '  .bubble a.primary:hover { background: #E04A00; border-color: #E04A00; }',
-    '  .bubble a.secondary:hover { border-color: rgba(41, 46, 56, 0.55); }',
+    '  .bubble a.secondary:hover { border-color: rgba(40, 46, 57, 0.55); }',
     '  .chip:hover { border-color: ' + ORANGE + '; background: #FFF6F1; }',
-    '  .chip.ghost:hover { background: rgba(255, 84, 0, 0.05); }',
-    '  .restart:hover { background: rgba(255, 84, 0, 0.09); }',
-    '  .pin-btn:hover { border-color: rgba(41, 46, 56, 0.5); }',
-    '  .pin-btn.person:hover { background: rgba(255, 84, 0, 0.06); }',
+    '  .chip.ghost:hover { background: rgba(255, 85, 0, 0.05); }',
+    '  .restart:hover { background: rgba(255, 85, 0, 0.09); }',
+    '  .pin-btn:hover { border-color: rgba(40, 46, 57, 0.5); }',
+    '  .pin-btn.person:hover { background: rgba(255, 85, 0, 0.06); }',
     '}',
 
     '@media (prefers-reduced-motion: reduce) {',
@@ -425,6 +449,18 @@
     var host = document.createElement('div');
     host.setAttribute('data-grace-assistant', '');
     var root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
+
+    /* @font-face is the one rule that cannot live in the shadow root: Chromium
+       and WebKit ignore font faces declared inside one (the family resolves,
+       the file is never fetched, and the text renders in the fallback with no
+       error). So this single rule - and nothing else - goes in the document,
+       guarded against a double include. Everything visual stays encapsulated. */
+    if (ASSET_BASE && !document.getElementById('grace-assistant-face')) {
+      var face = document.createElement('style');
+      face.id = 'grace-assistant-face';
+      face.textContent = FONT_FACE;
+      (document.head || document.documentElement).appendChild(face);
+    }
 
     var style = document.createElement('style');
     style.textContent = CSS;
