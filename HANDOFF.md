@@ -4,7 +4,7 @@
 **For:** Grace Church Orlando — discovergrace.com
 **Status at handoff:** built, deployed, publishing automated. Not yet embedded on
 the live WordPress site — see **GO-LIVE**.
-**Last updated:** 2026-08-28
+**Last updated:** 2026-09-13
 
 This document contains **no secret values**. It names credentials and says where
 they live; it never reproduces one.
@@ -25,6 +25,18 @@ Serves four files plus `_headers` and a `fonts/` directory:
 - `grace-assistant.js` — the whole widget. Vanilla JS, no dependencies, no build
   step. Renders inside a shadow root with `:host { all: initial }`, so the host
   page's CSS cannot reach in and the widget cannot leak out.
+
+  **A tapped question does not come back.** This shipped behind
+  `?ga-hide-tapped=1` on 2026-09-07 and **became the default on 2026-09-13**;
+  the flag and the comparison harness that ran the widget with it off are both
+  retired, so there is no longer an "off" to compare against. When a guest has
+  tapped everything on a page, the panel says so and hands off to a person —
+  wording from PLACEMENT's `End of questions`, falling back to the widget's own
+  `EXHAUSTION_NOTE`. `talk-person` is exempt and never counts toward exhaustion.
+  State is two closure variables: **no localStorage, no sessionStorage, no
+  cookies.** A reload is the reset. `Start over` clears it; `Back` does not,
+  because Back is navigation, not a reset — so Back after the handoff lands on
+  the bare person card, which is accepted by design.
 - `answers.json` — all guest-visible content. **Generated. Never hand-edit.**
 - `test.html` — a local mock harness. **Remove from the production origin at
   handoff** (see checklist). Note Pages strips the extension, so it is live at
@@ -129,14 +141,31 @@ Drive for "grace-assistant-corpus" alone will not find it), Drive fileId
 
 Five tabs: `READ ME`, `ANSWERS`, `PLACEMENT`, `FLAGS`, `CHANGE LOG`.
 
-**ANSWERS** — headers on **row 4**, data from **row 5**. Ten columns:
+**ANSWERS** — headers on **row 4**, data from **row 5**. Twelve columns:
 `A ID` · `B Slug` · `C Page` · `D Tap Question (guest sees)` ·
 `E Answer Text (pre-approved)` · `F Primary Action → Destination` (arrow is U+2192,
 plain `->` also accepted) · `G Topic Tags` · `H Status` · `I Source / Notes` ·
-`J Follow-up IDs (slugs)`
+`J Follow-up IDs (slugs)` · `K Also on` · `L Also on 2`
+
+**`Also on` / `Also on 2` (added 2026-09-13) put one question on more than one
+page.** A question ships to its `Page` plus whatever those two name. **Blank means
+"appears only on its Page"** — which is what every row said before the columns
+existed, and is why adding them changed nothing. Both are strict dropdowns
+carrying the same 18 page names, deliberately *without* `(any page)`: that value
+is the talk-person marker, not a page.
 
 **PLACEMENT** — headers row 4: `Page` · `URL path` · `Show / Hide` ·
-`Starter question IDs (3–5)` · `Why`
+`Starter question IDs (3–5)` · `Why` · `Panel title` · `Launcher label` ·
+`Intro` · `End of questions`
+
+**The last four (added 2026-09-13) are the route-meta columns**, and they are why
+per-page wording no longer lives in code. **A blank cell falls back to the
+hardcoded value in `publish.py`**, so the site is byte-identical until someone
+types something. `Panel title` / `Launcher label` / `Intro` fall back to
+`ROUTE_META_FALLBACK`; `End of questions` falls back to
+`END_OF_QUESTIONS_FALLBACK`, which must stay byte-identical to `EXHAUSTION_NOTE`
+in the widget. The names are not free choices — `read_placement` matches them
+lowercased, so a different spelling leaves the column silently unread.
 
 Data-validation dropdowns are in place: `Status` = `HOLD|DRAFT|APPROVED`,
 `Page` = the 19 live page names, `Show / Hide` = `SHOW|HIDE`, `URL path` = the
@@ -321,13 +350,20 @@ loudly, nothing is written. Correct behaviour, alarming if unexpected.
 
 1. Extend the `URL path` validation list on PLACEMENT (strict dropdown will
    otherwise reject the new path).
-2. Add the PLACEMENT row: page name, URL path, `SHOW`, 3–5 starter IDs, why.
-3. Add that page's rows to ANSWERS.
-4. Add the path to `PILOT_ROUTES` in `publish.py`.
-5. Add a `ROUTE_META_FALLBACK` entry for the path (`title`, `launcherLabel`,
+2. **Add the page name to the dropdown in all THREE columns** — `ANSWERS!C Page`,
+   `ANSWERS!K Also on`, and `ANSWERS!L Also on 2`. They are three separate
+   `ONE_OF_LIST` rules holding literal values, not one list three cells point at,
+   so a name added to one and not the others is typeable in one column and
+   rejected in the next. (`Page` also carries `(any page)`; the other two must
+   not.) PLACEMENT's own `Page` column is free text and is *not* one of the three.
+3. Add the PLACEMENT row: page name, URL path, `SHOW`, 3–5 starter IDs, why.
+4. Add that page's rows to ANSWERS.
+5. Add the path to `PILOT_ROUTES` in `publish.py`.
+6. Add a `ROUTE_META_FALLBACK` entry for the path (`title`, `launcherLabel`,
    `intro`) — without one those render `null` and the panel falls back to generic
-   strings.
-6. Publish.
+   strings. Or fill the PLACEMENT route-meta columns instead, which is the point
+   of them existing.
+7. Publish.
 
 **No WordPress change and no widget change.** The site-wide snippet reads
 `window.location.pathname` and finds the route itself.

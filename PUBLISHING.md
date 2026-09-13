@@ -141,9 +141,12 @@ not happen:
 - **Broken references** — a starter or follow-up slug that is not a shipped question.
 - **Self-reference** — a question listing itself as its own follow-up.
 - **Orphaned questions** — BFS from each page's starters must reach exactly the
-  set of questions the `Page` column assigns to that page. Checked in both
+  set of questions the `Page` columns assign to that page. Checked in both
   directions: a question no starter can reach fails, and so does a follow-up
-  that leaks into another page's question.
+  that leaks into another page's question. Since 2026-09-13 "the `Page` columns"
+  means `Page` plus `Also on` / `Also on 2`, and the BFS walks the per-page
+  follow-up lists — so it judges the graph that actually ships. The rule is
+  unchanged; the sets simply overlap now.
 - **Malformed links** — an `href` outside the whitelist (`/path`, `http(s)://`,
   `tel:`).
 - **`watch-online` as a follow-up** — it is starter-only by policy.
@@ -154,10 +157,98 @@ not happen:
 - **A destination cell that yields zero usable links** — someone wrote a
   destination and it produced nothing. Previously a warning, which let a button
   vanish silently from a shipped answer.
+- **An `Also on` value naming a page PLACEMENT does not define** — see below.
 
 Input is normalised before any of it is judged: `Status`, `Page` and `Slug` are
 trimmed and compared case-insensitively, and a plain ASCII `->` is accepted
 anywhere the Sheet's `→` is expected.
+
+## Putting one question on several pages
+
+`Also on` and `Also on 2` on the ANSWERS tab ship a question to more than one
+page. A question appears on its `Page` plus whatever those name. **Blank means it
+appears only on its `Page`.**
+
+### RULE: `Also on` alone is half an edit
+
+Naming a second page makes a question **expected** on that page. It does not make
+it **reachable** there — and a question nobody can navigate to is an orphan, which
+has always stopped the publish. You will get:
+
+```
+VALIDATION FAILED - nothing written
+
+  - /giving/: questions on this page unreachable from its starters: ['what-to-wear']
+```
+
+**The complete edit is two things:**
+
+1. Name the page in `Also on` (or `Also on 2`), **and**
+2. Make the question reachable on that page — either add it to that page's
+   `Starter question IDs` on PLACEMENT, or add its slug to the `Follow-up IDs` of
+   a question already on that page.
+
+Do one without the other and the publish stops. That is not a new rule; it is the
+existing orphan check meeting the new column. Nothing is written and nothing is
+deployed, so the fix is to finish the edit and wait for the next tick.
+
+### A shared question can show a SHORTER follow-up list on one page
+
+This is correct, and it surprises people.
+
+A question on two pages may list follow-ups that only exist on one of them.
+Follow-ups resolve **per page**: `publish.py` filters each question's follow-up
+list to the questions that belong to the page being rendered, and emits the
+shortened list under that route. A follow-up belonging to the other page is
+dropped rather than shipped to a page where tapping it would go nowhere.
+
+So `what-to-wear` on `/plan-your-visit/` can offer three follow-up chips, and the
+same `what-to-wear` on `/giving/` offer none. Same question, same answer, fewer
+chips. **That is the feature working.** If the shorter page should offer more, give
+those follow-ups an `Also on` for that page too — remembering the rule above.
+
+The BFS reachability check walks these same per-page lists, so the validator
+judges the graph that actually ships rather than an unfiltered one.
+
+### What stops the publish, and what only warns
+
+| `Also on` names… | Result |
+|---|---|
+| a page with a PLACEMENT row carrying one concrete URL path | ships |
+| a page with **no** PLACEMENT row | **exit 2, nothing written** |
+| a PLACEMENT row whose path is a pattern (`*`, `/watch/*`, `/a/, /b/*`) or the `——— HIDE below ———` separator | **exit 2** — those rows name rules, not pages |
+| a page whose PLACEMENT row is `HIDE` | **warns and ships** — pre-staging for a page that is not live yet is legitimate |
+
+The fatal message names the offending row and the bad value:
+
+```
+FATAL PYV-01 (what-to-wear): Also on is 'Sermons', which has no PLACEMENT row
+      naming one concrete page. Add the PLACEMENT row, or clear the cell.
+```
+
+The dropdown protects the editor at typing time. This check is the backstop for
+what a dropdown cannot catch: **a PLACEMENT row deleted afterwards, or cells
+pasted in** — paste bypasses Sheets validation entirely.
+
+## Per-page wording, from the Sheet
+
+PLACEMENT's `Panel title`, `Launcher label`, `Intro` and `End of questions`
+columns drive the per-page strings that used to live only in code.
+
+**A blank cell falls back to the hardcoded value**, so the site is byte-identical
+until someone types something. `Panel title` / `Launcher label` / `Intro` fall
+back to `ROUTE_META_FALLBACK` in `publish.py`; `End of questions` — the line a
+guest sees once they have tapped everything on a page — falls back to
+`END_OF_QUESTIONS_FALLBACK`, which is byte-identical to `EXHAUSTION_NOTE` in the
+widget.
+
+`End of questions` is written into `answers.json` **only when the cell says
+something different from that default.** Retyping the default by hand is treated
+as blank. That is deliberate: emitting the fallback would rewrite every route for
+no change a guest could see.
+
+The column names are matched lowercased and are not free choices — spell one
+differently and it is silently never read.
 
 ## Known behaviors, not bugs
 
@@ -236,15 +327,21 @@ read. Each script defaults to a dry run and requires `--apply` to write.
 
 1. Add a `PLACEMENT` row: the page name, its URL path, `SHOW`, and 3–5 starter
    question IDs.
-2. Add that page's rows to `ANSWERS` (slug, question, answer, status, follow-ups).
-3. Add the URL path to `PILOT_ROUTES` in `publish.py`.
-4. Add a `ROUTE_META_FALLBACK` entry for that path (`title`, `launcherLabel`,
-   `intro`). Without one those three fields come out `null` and the widget falls
+2. **Add the page name to the dropdown in all THREE columns** — `ANSWERS!C Page`,
+   `ANSWERS!K Also on`, `ANSWERS!L Also on 2`. They are three independent
+   `ONE_OF_LIST` rules holding literal values, not one shared list, so a name
+   added to one and not the others is typeable in one column and rejected in the
+   next. `Page` also carries `(any page)`; the other two must not.
+3. Add that page's rows to `ANSWERS` (slug, question, answer, status, follow-ups).
+4. Add the URL path to `PILOT_ROUTES` in `publish.py`.
+5. Add a `ROUTE_META_FALLBACK` entry for that path (`title`, `launcherLabel`,
+   `intro`), or fill the PLACEMENT route-meta columns instead. Without either,
+   those three fields come out `null` and the widget falls
    back to its built-in strings — the panel still works, but it will say
-   "GraceGuide" rather than anything page-specific. (If the `PLACEMENT` tab ever
-   grows `Panel title` / `Launcher label` / `Intro` columns, `publish.py` picks
-   them up automatically and they win over this fallback.)
-5. Publish.
+   "GraceGuide" rather than anything page-specific. (Those PLACEMENT columns exist as
+   of 2026-09-13 and `publish.py` reads them; a value there wins over this
+   fallback.)
+6. Publish.
 
 No widget change and no WordPress change. The site-wide snippet reads
 `window.location.pathname` and finds the route itself; pages not listed in

@@ -37,17 +37,22 @@
   var ROUTER_URL = script.getAttribute('data-router') || '';
   var ROUTER_TIMEOUT_MS = 2000;
 
-  /* Guest-flow experiment, DEFAULT OFF. Every path it gates is written as
-     `HIDE_TAPPED && ...`, so with the flag absent the widget behaves exactly as
-     it did before this existed. Query-only and hyphenated to match the existing
-     ?ga-route= idiom - window.location.search is the only environment this
-     widget has ever read, and one convention beats two. */
-  var HIDE_TAPPED = /[?&]ga-hide-tapped=1(?:&|$)/.test(window.location.search);
+  /* A tapped question does not come back. This shipped behind ?ga-hide-tapped=1
+     from 2026-09-07 and became the default on 2026-09-13 once T had approved it
+     and the wording below could come from the Sheet. The flag, and the
+     comparison harness that ran the widget with it off, are both retired - there
+     is no longer an "off" to compare against.
 
-  /* PROVISIONAL copy - T rewrites it. Hardcoded on purpose: the per-route
-     override plumbing (route.X || meta.X || literal) could carry this in one
-     line, but the Sheet cannot emit the key yet - that needs a publish.py
-     change and a PLACEMENT column, both out of scope for this pass. */
+     State is two closure variables and nothing else: no localStorage, no
+     sessionStorage, no cookies. A reload is the reset. `Start over` clears both;
+     `Back` clears neither, because Back is navigation, not a reset. */
+
+  /* The default end-of-questions line. A route may override it: publish.py emits
+     routes[path].endOfQuestions from the PLACEMENT 'End of questions' column,
+     and omits the key when that cell is blank - so this string is what a guest
+     sees until someone types something different. It MUST stay byte-identical to
+     END_OF_QUESTIONS_FALLBACK in publish.py, which is what makes omitting the
+     key safe. */
   var EXHAUSTION_NOTE =
     'That covers everything I can answer here. Want to talk with a real person?';
 
@@ -69,8 +74,8 @@
   /* Launcher-pill colour trial for T, 2026-09-13. The pill is white with navy
      text today and disappears against Grace's pale bands; a solid fill stops it
      depending on what is behind it at all. Query-only, hyphenated, matching the
-     ?ga-route= / ?ga-hide-tapped= idiom - window.location.search is the only
-     environment this widget has ever read.
+     ?ga-route= idiom - window.location.search is the only environment this
+     widget has ever read.
 
      NOTE the variant names are T's, not a scheme: 'navy', 'orange' and 'teal'
      name the FILL, 'white' names the TEXT (it is her literal request - orange
@@ -528,8 +533,8 @@
 
     if (!starters.length) return; /* nothing to ask here - stay off the page */
 
-    /* Flag-gated state. In-memory only for this pageview: no localStorage, no
-       sessionStorage, no cookies. A reload is the reset, by design. */
+    /* In-memory only for this pageview: no localStorage, no sessionStorage, no
+       cookies. A reload is the reset, by design. */
     var tapped = {};
     var exhausted = false; /* latch - the handoff fires at most once per pass */
 
@@ -683,7 +688,7 @@
          hiding from one place and none of them has to remember to. */
       var visible = ids.filter(function (id) {
         if (id === TALK_PERSON_ID) return false;
-        if (HIDE_TAPPED && tapped[id]) return false;
+        if (tapped[id]) return false;
         return !!questions[id];
       });
 
@@ -693,15 +698,14 @@
          condition (current list empty AND starter pool empty). The latch stops
          the handoff re-firing out of talk-person's own render, and out of Back
          landing on the same empty starters card afterwards. */
-      if (HIDE_TAPPED && !exhausted && !visible.length && questions[TALK_PERSON_ID]) {
+      if (!exhausted && !visible.length && questions[TALK_PERSON_ID]) {
         enterExhaustion();
         return;
       }
 
       options.textContent = '';
-      /* A section heading over zero chips reads as a broken card. Suppressed
-         only under the flag - flag-off rendering stays byte-identical. */
-      if (visible.length || !HIDE_TAPPED) {
+      /* A section heading over zero chips reads as a broken card. */
+      if (visible.length) {
         options.appendChild(el('div', 'options-label', labelOverride || (atHome
           ? (meta.startersLabel || 'Common questions')
           : (meta.followupsLabel || 'People also ask'))));
@@ -727,7 +731,10 @@
 
       var row = el('div', 'row from-church');
       var bubble = el('div', 'bubble is-intro');
-      bubble.appendChild(el('p', null, EXHAUSTION_NOTE));
+      /* Sheet first, then the built-in. publish.py only emits endOfQuestions
+         when PLACEMENT's cell says something other than the default, so an
+         absent key and a blank cell are the same thing here. */
+      bubble.appendChild(el('p', null, route.endOfQuestions || EXHAUSTION_NOTE));
       row.appendChild(bubble);
       feed.insertBefore(row, feed.firstChild);
       resetScroll();
@@ -864,7 +871,7 @@
       /* Record before rendering, so the question just tapped is already gone
          from the lists this same render builds. talk-person is exempt: it is a
          pinned action and must never count toward exhaustion. */
-      if (HIDE_TAPPED && id !== TALK_PERSON_ID) tapped[id] = true;
+      if (id !== TALK_PERSON_ID) tapped[id] = true;
 
       /* Clear first - this view is the whole card, not another entry in a log. */
       feed.textContent = '';
@@ -876,9 +883,9 @@
       });
       /* A follow-up list that filters to nothing is NOT exhaustion while
          starters remain - it drops to the browse list below, which renderOptions
-         filters again. Flag off, this is the same array as followups. */
+         filters again. */
       var visibleFollowups = followups.filter(function (fid) {
-        return !(HIDE_TAPPED && tapped[fid]);
+        return !tapped[fid];
       });
       /* After 'Talk to a person' the remaining chips are a browsing offer, not a
          follow-up set - the mockup labels them accordingly. */
@@ -970,10 +977,10 @@
 
     launcher.addEventListener('click', function () { isOpen ? close() : open(); });
     closeBtn.addEventListener('click', close);
-    /* Start over is the labelled reset, so it clears the flag-gated state too:
-       otherwise a guest who has already been handed to a person taps it and
-       lands on a card with no questions on it. Back does not clear - Back is
-       navigation, not a reset. Both lines are no-ops with the flag off. */
+    /* Start over is the labelled reset, so it clears the tapped set and the
+       exhaustion latch: otherwise a guest who has already been handed to a
+       person taps it and lands on a card with no questions on it. Back does not
+       clear - Back is navigation, not a reset. */
     restart.addEventListener('click', function () {
       tapped = {};
       exhausted = false;
