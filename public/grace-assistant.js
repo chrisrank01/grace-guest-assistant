@@ -55,10 +55,48 @@
   var ORANGE = '#FF5500';
   /* The mark's own orange, from T's Grace_Logo.svg. Deliberately NOT the UI
      accent: it is used for the launcher badge and the header dots and nothing
-     else. Buttons, focus rings, borders and carets stay on ORANGE. */
+     else. Buttons, focus rings and borders stay on ORANGE. */
   var LOGO_ORANGE = '#F15822';
+  /* Grace teal, taken from the SHIPPING site CSS (Salient 'extra-color-3' on
+     discovergrace.com), not from the token spec, which carries #03ADB0. The
+     spec has been wrong about a brand hex twice this month; the CSS Grace
+     actually serves is the better authority. Used only by the launcher-pill
+     trial below - no production rule references it. */
+  var TEAL = '#03aeaf';
   var CREAM = '#FAFAF7';
   var RADIUS = '4px';
+
+  /* Launcher-pill colour trial for T, 2026-09-13. The pill is white with navy
+     text today and disappears against Grace's pale bands; a solid fill stops it
+     depending on what is behind it at all. Query-only, hyphenated, matching the
+     ?ga-route= / ?ga-hide-tapped= idiom - window.location.search is the only
+     environment this widget has ever read.
+
+     NOTE the variant names are T's, not a scheme: 'navy', 'orange' and 'teal'
+     name the FILL, 'white' names the TEXT (it is her literal request - orange
+     fill, white label). Do not rationalise them without asking her; the words
+     are what she will be shown alongside the screenshots.
+
+     Measured against white text/navy text at 11px uppercase, which is normal-size
+     text by WCAG and so needs 4.5:1:
+       navy   #282E39 + white = 13.64:1  passes
+       teal   #03aeaf + navy  =  4.98:1  passes
+       orange #FF5500 + navy  =  4.25:1  marginal, fails 4.5
+       orange #FF5500 + white =  3.21:1  fails
+     Teal is the only fill that carries T's requested colour AND clears 4.5:1;
+     teal with WHITE text is 2.74:1 and is deliberately not offered.
+     With no parameter the widget emits no extra CSS at all, so the default
+     rendering stays byte-identical to today. */
+  var PILL_VARIANTS = {
+    navy:   { bg: NAVY,   fg: '#FFFFFF' },
+    teal:   { bg: TEAL,   fg: NAVY },
+    orange: { bg: ORANGE, fg: NAVY },
+    white:  { bg: ORANGE, fg: '#FFFFFF' }
+  };
+  var PILL_VARIANT = (function () {
+    var m = /[?&]ga-pill=([a-z]+)(?:&|$)/.exec(window.location.search);
+    return (m && PILL_VARIANTS[m[1]]) ? m[1] : null;
+  })();
 
   var HOME_ID = '__home';
   var TALK_PERSON_ID = 'talk-person';
@@ -349,8 +387,10 @@
     '  font-family: ' + SANS_MED + '; font-size: 11px; font-weight: 500; letter-spacing: 0.07em;',
     '  text-transform: uppercase; color: rgba(40, 46, 57, 0.5); margin-bottom: 2px;',
     '}',
+    /* One flex child now (.text), so there is nothing for a gap to space and
+       none is set. align-items: center still does the vertical centring. */
     '.chip {',
-    '  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;',
+    '  display: flex; align-items: center; width: 100%; text-align: left;',
     '  font: inherit; font-family: ' + SANS_MED + '; font-weight: 500;',
     '  font-size: 14.5px; color: ' + NAVY + '; cursor: pointer;',
     '  background: #FFFFFF; border: 1px solid rgba(40, 46, 57, 0.16);',
@@ -361,7 +401,12 @@
     '.chip:active { border-color: ' + ORANGE + '; background: #FFF6F1; transform: scale(0.98); }',
     '.chip:focus-visible { outline: 2px solid ' + ORANGE + '; outline-offset: 1px; }',
     '.chip .text { flex: 1 1 auto; }',
-    '.chip .caret { flex: none; color: ' + ORANGE + '; font-size: 17px; line-height: 1; }',
+    /* NO .caret rule, and do not add one back as a text glyph. The chip is a
+       flex row with align-items: center, which centres the caret span's BOX
+       correctly - but the glyph itself rides high inside its own line box, so
+       the ink read as misaligned however the box was centred. Removed
+       2026-09-13 at T's request. A chevron here must be an SVG, never a
+       character. */
     '.chip.ghost { background: transparent; border-style: dashed; color: rgba(40, 46, 57, 0.72); }',
     '.chip.ghost:active { background: rgba(255, 85, 0, 0.09); }',
 
@@ -456,6 +501,20 @@
     '}'
   ].join('\n');
 
+  /* Appended AFTER the whole sheet so it wins on source order at equal
+     specificity, and empty unless ?ga-pill= named a known variant - which is
+     what makes the no-parameter path provably identical to today rather than
+     merely intended to be. The focus ring stays navy and sits 2px outside the
+     pill, so it lands on the page background and reads on every fill. */
+  var PILL_CSS = PILL_VARIANT ? [
+    '',
+    '/* ?ga-pill=' + PILL_VARIANT + ' - launcher pill colour trial */',
+    '.launcher-pill {',
+    '  background: ' + PILL_VARIANTS[PILL_VARIANT].bg + ';',
+    '  color: ' + PILL_VARIANTS[PILL_VARIANT].fg + ';',
+    '}'
+  ].join('\n') : '';
+
   /* ------------------------------------------------------------------ */
   /* Widget                                                              */
   /* ------------------------------------------------------------------ */
@@ -491,7 +550,7 @@
     }
 
     var style = document.createElement('style');
-    style.textContent = CSS;
+    style.textContent = CSS + PILL_CSS;
     root.appendChild(style);
 
     var wrap = el('div', 'wrap');
@@ -702,7 +761,6 @@
       var button = el('button', 'chip' + (ghost ? ' ghost' : ''));
       button.type = 'button';
       button.appendChild(el('span', 'text', label));
-      button.appendChild(el('span', 'caret', ghost ? '‹' : '›'));
       button.addEventListener('click', function () { select(id); });
       return button;
     }
