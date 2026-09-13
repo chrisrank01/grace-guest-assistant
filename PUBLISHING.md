@@ -335,12 +335,19 @@ read. Each script defaults to a dry run and requires `--apply` to write.
 3. Add that page's rows to `ANSWERS` (slug, question, answer, status, follow-ups).
 4. Add the URL path to `PILOT_ROUTES` in `publish.py`.
 5. Add a `ROUTE_META_FALLBACK` entry for that path (`title`, `launcherLabel`,
-   `intro`), or fill the PLACEMENT route-meta columns instead. Without either,
-   those three fields come out `null` and the widget falls
-   back to its built-in strings — the panel still works, but it will say
-   "GraceGuide" rather than anything page-specific. (Those PLACEMENT columns exist as
-   of 2026-09-13 and `publish.py` reads them; a value there wins over this
-   fallback.)
+   `intro`), or fill the PLACEMENT route-meta columns instead. (Those PLACEMENT
+   columns exist as of 2026-09-13 and `publish.py` reads them; a value there wins
+   over this fallback.) Without either, those three fields come out `null` and
+   the page loses its page-specific voice — the panel still works, but:
+
+   | field | with `null` |
+   |---|---|
+   | `title` | **no heading at all** in the panel body — `seed()` renders `.route-heading` only `if (route.title)` |
+   | `intro` | **no opening message** — `meta` carries no `intro`, so nothing renders |
+   | `launcherLabel` | the pill says **"Ask Grace"**, the `GLOBAL_META` default, instead of something like "Planning a visit? Tap here" |
+
+   The panel header is unaffected either way: it is a fixed brand lockup reading
+   **"Grace" / "Guest Assistant"** from `GLOBAL_META`, never the route.
 6. Publish.
 
 No widget change and no WordPress change. The site-wide snippet reads
