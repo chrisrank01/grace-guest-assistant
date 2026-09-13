@@ -81,6 +81,28 @@ COL_A = 'Answer Text (pre-approved)'
 COL_LINK = 'Primary Action → Destination'
 COL_STATUS = 'Status'
 COL_FOLLOWUPS = 'Follow-up IDs (slugs)'
+# Added 2026-09-13. A question ships to its Page plus any page named here.
+# Blank means "appears only on its Page", which is what all 70 rows say today.
+COL_ALSO_1 = 'Also on'
+COL_ALSO_2 = 'Also on 2'
+
+# The end-of-questions handoff line, per route, from PLACEMENT.
+COL_END = 'end of questions'     # matched lowercased, like the other route-meta
+
+# What the widget says when a guest has tapped everything on a page. This MUST
+# stay byte-identical to EXHAUSTION_NOTE in public/grace-assistant.js: it is the
+# string the widget falls back to when a route carries no endOfQuestions key,
+# and the two drifting apart would mean the Sheet silently stopped being able to
+# reproduce the default.
+#
+# A route whose cell is blank resolves to exactly this string, and publish.py
+# then omits the key rather than writing it. That is deliberate: emitting it
+# would change every route in answers.json on the first run after this change,
+# for no behaviour change at all, and the whole point is that the site stays
+# byte-identical until someone types something.
+END_OF_QUESTIONS_FALLBACK = (
+    'That covers everything I can answer here. Want to talk with a real person?'
+)
 
 HEADER_ROW = 4          # 1-indexed; data starts at row 5
 SCOPES = [
@@ -187,34 +209,70 @@ def tabulate(values, header_row=HEADER_ROW):
     return header, out
 
 
+def is_concrete_path(path):
+    """Is this URL path one real page, or a pattern standing for many?
+
+    PLACEMENT's HIDE block carries catch-all rows - '*', '/watch/*',
+    '/sermons/, /sermon/*', 'gracecounselingcenter.org/*' - and one separator
+    row with no path at all. Those name rules, not pages. A page name is only
+    addressable by an 'Also on' cell if it corresponds to exactly one real
+    path, so the valid-page list is built from this test rather than from
+    'every row that has something in column A' - which would happily accept
+    'Also on: ——— HIDE below ———'.
+    """
+    path = (path or '').strip()
+    return bool(path) and path.startswith('/') and ',' not in path and '*' not in path
+
+
 def read_placement(sh):
-    """SHOW rows whose URL path is in PILOT_ROUTES -> route config."""
+    """PLACEMENT -> (pilot route config, page inventory).
+
+    The route config is the SHOW rows whose URL path is in PILOT_ROUTES, as
+    before. The inventory is EVERY row naming one concrete page, pilot or not,
+    and is what 'Also on' values are validated against - a question may legally
+    name a page that is not in the pilot, it just will not ship there yet.
+    """
     header, rows = tabulate(sh.worksheet('PLACEMENT').get_all_values())
     lower = {h.strip().lower(): h for h in header if h.strip()}
     # optional, absent today - present-tense support so the Sheet can drive these later
     col_title = lower.get('panel title')
     col_launch = lower.get('launcher label')
     col_intro = lower.get('intro')
+    col_end = lower.get(COL_END)
 
     routes = {}
+    inventory = {}          # folded page name -> {'page', 'path', 'show'}
     for row in rows:
+        page = row.get(COL_PAGE, '').strip()
         path = row.get('URL path', '').strip()
-        show = row.get('Show / Hide', '').strip().upper()
-        if show != 'SHOW' or path not in PILOT_ROUTES:
+        show = row.get('Show / Hide', '').strip().upper() == 'SHOW'
+        if page and is_concrete_path(path):
+            # GATE: two PLACEMENT rows claiming one page name makes 'Also on'
+            # ambiguous - which path did the author mean?
+            if fold(page) in inventory:
+                fatal(f'PLACEMENT names the page {page!r} twice '
+                      f'({inventory[fold(page)]["path"]} and {path})')
+            inventory[fold(page)] = {'page': page, 'path': path, 'show': show}
+        if not show or path not in PILOT_ROUTES:
             continue
         fallback = ROUTE_META_FALLBACK.get(path, {})
         routes[path] = {
-            'page': row.get(COL_PAGE, '').strip(),
+            'page': page,
             'starter_ids': [s.strip() for s in row.get('Starter question IDs (3–5)', '').split(',') if s.strip()],
             'title': (row.get(col_title) or '').strip() or fallback.get('title'),
             'launcherLabel': (row.get(col_launch) or '').strip() or fallback.get('launcherLabel'),
             'intro': (row.get(col_intro) or '').strip() or fallback.get('intro'),
+            'endOfQuestions': ((row.get(col_end) or '').strip()
+                               or fallback.get('endOfQuestions')
+                               or END_OF_QUESTIONS_FALLBACK),
         }
-    if col_title or col_launch or col_intro:
+    if col_title or col_launch or col_intro or col_end:
         say('  PLACEMENT supplies route meta columns; Sheet values win over fallback')
     else:
         say('  PLACEMENT has no route-meta columns; using ROUTE_META_FALLBACK')
-    return routes
+    say(f'  page inventory: {len(inventory)} page(s) with one concrete path '
+        f'({sum(1 for v in inventory.values() if v["show"])} SHOW)')
+    return routes, inventory
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +314,7 @@ def parse_links(raw, slug):
 
 
 def build(sh):
-    routes_cfg = read_placement(sh)
+    routes_cfg, inventory = read_placement(sh)
     if not routes_cfg:
         die(['PLACEMENT has no SHOW rows matching PILOT_ROUTES'])
 
@@ -276,13 +334,40 @@ def build(sh):
         page, status = norm(row.get(COL_PAGE)), norm(row.get(COL_STATUS))
         question, answer = norm(row.get(COL_Q)), norm(row.get(COL_A))
 
+        # GATE: 'Also on' naming a page PLACEMENT does not define. The dropdown
+        # protects the editor at typing time; this is the backstop for what a
+        # dropdown cannot catch - a PLACEMENT row deleted afterwards, or cells
+        # pasted in, which bypass Sheets validation entirely. Checked before the
+        # scope filter so a bad value is caught even on a row that will not ship.
+        also = []
+        for col in (COL_ALSO_1, COL_ALSO_2):
+            value = norm(row.get(col))
+            if not value:
+                continue
+            entry = inventory.get(fold(value))
+            if entry is None:
+                fatal(f'{rid or "(no ID)"} ({slug or "(no slug)"}): {col} is '
+                      f'{value!r}, which has no PLACEMENT row naming one concrete '
+                      f'page. Add the PLACEMENT row, or clear the cell.')
+                continue
+            # Tier two: the page exists but is switched off. Pre-staging content
+            # for a page that is not live yet is legitimate authoring, so this
+            # warns and ships rather than stopping the publish.
+            if not entry['show']:
+                warn(f'{rid} ({slug}): {col} is {value!r}, whose PLACEMENT row is '
+                     f'HIDE - the question will not appear there until it is SHOW')
+            also.append(entry['page'])
+
         # GATE: an ID may appear once. Duplicates make starter lists ambiguous.
         if rid:
             if rid in seen_ids:
                 fatal(f'duplicate ID {rid!r}')
             seen_ids.add(rid)
 
-        in_scope = fold(page) in page_to_route or slug == TALK_PERSON_SLUG
+        # Every page this row claims: its Page, plus Also on / Also on 2.
+        # A row is in scope if ANY of them is a pilot page.
+        claimed = [page] + [p for p in also if fold(p) != fold(page)]
+        in_scope = any(fold(p) in page_to_route for p in claimed) or slug == TALK_PERSON_SLUG
         if not in_scope:
             skipped += 1
             out_of_scope[page or '(blank)'] = out_of_scope.get(page or '(blank)', 0) + 1
@@ -317,10 +402,14 @@ def build(sh):
         entry['_followups_raw'] = [s.strip() for s in row.get(COL_FOLLOWUPS, '').split(',') if s.strip()]
         questions[slug] = entry
         by_id[rid] = slug
-        # Expected membership comes from the Page column, independent of the
+        # Expected membership comes from the Page columns, independent of the
         # follow-up graph - that is what lets the BFS check below actually fail.
-        if fold(page) in page_to_route:
-            page_slugs.setdefault(page_to_route[fold(page)], set()).add(slug)
+        # A multi-page question is expected on every pilot page it claims, which
+        # is what keeps the reachability rule honest rather than loosened: each
+        # page must still reach exactly its own set, the sets simply overlap now.
+        for claim in claimed:
+            if fold(claim) in page_to_route:
+                page_slugs.setdefault(page_to_route[fold(claim)], set()).add(slug)
 
     if FATAL:
         die(FATAL)
@@ -373,6 +462,36 @@ def build(sh):
             'launcherLabel': cfg['launcherLabel'],
             'starters': starters,
         }
+
+        # 3c: follow-ups resolve PER PAGE. A shared question can list follow-ups
+        # that only exist on one of its pages; those must not render on the
+        # other. Resolved here rather than in the widget - the widget already
+        # receives everything else per route and stays a renderer, and doing it
+        # here leaves the result visible in answers.json, so a shortened list
+        # shows up in a diff and in the git history instead of being an
+        # invisible runtime decision.
+        #
+        # Emitted ONLY for questions whose list actually differs on this page.
+        # With no multi-page questions nothing differs, the key is absent, and
+        # the artifact is byte-identical to before this feature existed.
+        mine = page_slugs.get(path, set())
+        per_page = {}
+        for slug in sorted(mine):
+            full = questions[slug]['followups']
+            here = [f for f in full if f in mine]
+            if here != full:
+                per_page[slug] = here
+        if per_page:
+            routes[path]['followups'] = per_page
+            say(f'  {path}: {len(per_page)} question(s) with a page-specific '
+                f'follow-up list')
+
+        # The handoff line. A blank cell resolved to END_OF_QUESTIONS_FALLBACK
+        # up in read_placement, and that is exactly what the widget says on its
+        # own - so writing it would change every route for no behaviour change.
+        # Emitted only when the Sheet actually says something different.
+        if cfg['endOfQuestions'] != END_OF_QUESTIONS_FALLBACK:
+            routes[path]['endOfQuestions'] = cfg['endOfQuestions']
 
     today = datetime.date.today().isoformat()
     doc = {
@@ -429,9 +548,16 @@ def validate(doc, page_slugs):
     # reach fails here instead of quietly defining itself as reachable.
     for path, r in routes.items():
         expected = set(page_slugs.get(path, set()))
+        # Walk the SAME follow-up lists the widget will be given on this page,
+        # not the unfiltered ones - otherwise the validator blesses a graph that
+        # is not the one that ships. The rule itself is unchanged: every question
+        # the Page columns assign to this page must still be reachable from this
+        # page's starters, and nothing else may be.
+        per_page = r.get('followups', {})
         seen, queue = set(r['starters']), list(r['starters'])
         while queue:
-            for f in qs.get(queue.pop(0), {}).get('followups', []):
+            current = queue.pop(0)
+            for f in per_page.get(current, qs.get(current, {}).get('followups', [])):
                 if f not in seen:
                     seen.add(f)
                     queue.append(f)
