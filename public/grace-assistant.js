@@ -412,6 +412,14 @@
        the ink read as misaligned however the box was centred. Removed
        2026-09-13 at T's request. A chevron here must be an SVG, never a
        character. */
+    /* The end-of-questions line. Sits in the options block, where the chips
+       would have been - it is what the guest has instead of more chips, not
+       another message in the feed. Muted, because the answer above it is the
+       thing they came for. */
+    '.exhausted-note {',
+    '  font-size: 14px; line-height: 1.5; color: rgba(40, 46, 57, 0.66);',
+    '  padding: 2px 2px 6px;',
+    '}',
     '.chip.ghost { background: transparent; border-style: dashed; color: rgba(40, 46, 57, 0.72); }',
     '.chip.ghost:active { background: rgba(255, 85, 0, 0.09); }',
 
@@ -692,18 +700,40 @@
         return !!questions[id];
       });
 
-      /* Exhaustion. select() already drops to the starter pool whenever a
-         follow-up list filters to nothing, so the only way to arrive here empty
-         is that the starter pool is empty too - which is exactly the approved
-         condition (current list empty AND starter pool empty). The latch stops
-         the handoff re-firing out of talk-person's own render, and out of Back
-         landing on the same empty starters card afterwards. */
-      if (!exhausted && !visible.length && questions[TALK_PERSON_ID]) {
-        enterExhaustion();
+      /* Resolved once. atHome picks the section heading; homeCard says whether
+         an ANSWER is on screen above these chips, and so drives both the Back
+         button and - since 2026-09-14 - what an empty list is allowed to do. */
+      var homeCard = (isHomeCard === undefined) ? atHome : isHomeCard;
+
+      options.textContent = '';
+
+      /* Exhaustion. select() drops to the starter pool whenever a follow-up
+         list filters to nothing, so arriving here empty means the starter pool
+         is empty too: the guest has tapped everything on this page.
+
+         This replaces the CHIP LIST. It must never touch the feed. Until
+         2026-09-14 it called select(TALK_PERSON_ID), whose first act is
+         `feed.textContent = ''` - so tapping the last question rendered its
+         answer and then wiped it a few milliseconds later, handing the guest a
+         phone number instead of the answer they asked for. The answer stays;
+         'Talk to a person' is permanently pinned, so a human is still one tap
+         away. */
+      if (!visible.length && questions[TALK_PERSON_ID]) {
+        /* On an ANSWER card, arriving here IS exhaustion - the guest just tapped
+           the last question, and the line explains why there is nothing under
+           their answer. On the HOME card, speak only if they had already
+           exhausted the page in this pass (they hit Back afterwards); any other
+           empty list keeps the bare card this has always shown. The order
+           matters: the latch is read before it is set, or the test is circular.
+           `Start over` clears it. */
+        if (!homeCard || exhausted) {
+          options.appendChild(exhaustionNote());
+        }
+        exhausted = true;
+        renderPinned(homeCard);
         return;
       }
 
-      options.textContent = '';
       /* A section heading over zero chips reads as a broken card. */
       if (visible.length) {
         options.appendChild(el('div', 'options-label', labelOverride || (atHome
@@ -715,29 +745,24 @@
         options.appendChild(chip(questions[id].label, id, false));
       });
 
-      renderPinned(isHomeCard === undefined ? atHome : isHomeCard);
+      renderPinned(homeCard);
     }
 
-    /* The handoff, via the same handler a tap on the pinned button invokes.
-       Two ordering rules, both load-bearing:
-         1. Latch BEFORE select(). talk-person has no follow-ups, so select()
-            re-enters renderOptions through the starter fallback - still empty -
-            and without the latch would call straight back in here forever.
-         2. Inject the note AFTER select() returns. select() clears the feed, so
-            a note written first would be wiped before the guest ever saw it. */
-    function enterExhaustion() {
-      exhausted = true;
-      select(TALK_PERSON_ID, { suppressEcho: true });
+    /* The end-of-questions line, built to sit WHERE THE CHIPS WOULD HAVE GONE.
+       A builder, not an action: it renders nothing by itself and touches no
+       other part of the card. That is the whole point - the previous version
+       was an action, and what it acted on was the guest's answer.
 
-      var row = el('div', 'row from-church');
-      var bubble = el('div', 'bubble is-intro');
+       role="status" keeps the announcement the old placement got for free by
+       living inside the feed's aria-live region. */
+    function exhaustionNote() {
+      var note = el('div', 'exhausted-note');
+      note.setAttribute('role', 'status');
       /* Sheet first, then the built-in. publish.py only emits endOfQuestions
          when PLACEMENT's cell says something other than the default, so an
          absent key and a blank cell are the same thing here. */
-      bubble.appendChild(el('p', null, route.endOfQuestions || EXHAUSTION_NOTE));
-      row.appendChild(bubble);
-      feed.insertBefore(row, feed.firstChild);
-      resetScroll();
+      note.appendChild(el('p', null, route.endOfQuestions || EXHAUSTION_NOTE));
+      return note;
     }
 
     /* Fixed two-button row under the chips: Back (answer views only) and Talk to
@@ -860,10 +885,12 @@
         .then(function () { clearTimeout(timer); });
     }
 
-    /* opts.suppressEcho drops the guest bubble. A tap is a question the guest
-       asked, so it is echoed; the exhaustion handoff is the widget's own move,
-       and echoing 'Talk to a person' there would put words in their mouth. */
-    function select(id, opts) {
+    /* Every call here is a question the guest asked, so every one is echoed.
+       The `opts.suppressEcho` escape hatch that used to live here existed for
+       exactly one caller - the automatic exhaustion handoff - and went with it
+       on 2026-09-14. There is no longer any path that renders an answer the
+       guest did not ask for. */
+    function select(id) {
       if (id === HOME_ID) { goHome(); return; }
       var node = questions[id];
       if (!node) return;
@@ -875,7 +902,7 @@
 
       /* Clear first - this view is the whole card, not another entry in a log. */
       feed.textContent = '';
-      if (!(opts && opts.suppressEcho)) askedBubble(node.label);
+      askedBubble(node.label);
       answerBubble(node);
 
       var followups = (node.followups || []).filter(function (fid) {

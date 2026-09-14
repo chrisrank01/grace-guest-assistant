@@ -35,8 +35,23 @@ Serves four files plus `_headers` and a `fonts/` directory:
   `EXHAUSTION_NOTE`. `talk-person` is exempt and never counts toward exhaustion.
   State is two closure variables: **no localStorage, no sessionStorage, no
   cookies.** A reload is the reset. `Start over` clears it; `Back` does not,
-  because Back is navigation, not a reset — so Back after the handoff lands on
-  the bare person card, which is accepted by design.
+  because Back is navigation, not a reset.
+
+  **The end-of-questions line replaces the CHIP LIST, never the card.** The
+  guest keeps the answer they just asked for, and `Talk to a person` stays
+  pinned, so a human is one tap away. This is the fix for a bug live between the
+  2026-09-13 and 2026-09-14 deploys: exhaustion called `select('talk-person')`,
+  whose first act is `feed.textContent = ''`, so tapping the last question on a
+  page rendered its answer and then wiped it milliseconds later — the guest
+  asked a question and got a phone number. **Contact details are now one tap
+  away rather than automatic.** That is the trade: the old behaviour bought that
+  convenience by throwing away the answer.
+
+  **Why four review passes missed it:** every exhaustion test asserted the
+  handoff *happened* — note renders, person card renders, chips empty, no echo
+  bubble — and not one asserted the guest still had the answer. The feature test
+  passed while the guest experience was broken. **Write the next battery against
+  what the guest sees, not against what the code did.**
 - `answers.json` — all guest-visible content. **Generated. Never hand-edit.**
 - `test.html` — a local mock harness. **Remove from the production origin at
   handoff** (see checklist). Note Pages strips the extension, so it is live at
