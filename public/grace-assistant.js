@@ -68,6 +68,11 @@
      actually serves is the better authority. Used only by the launcher-pill
      trial below - no production rule references it. */
   var TEAL = '#03aeaf';
+  /* The same teal darkened until white text clears 4.5:1. Hue and saturation are
+     Grace's, not a new colour: H 180.3 -> 180.0 and S 0.966 -> 0.969, with
+     lightness taken from 34.9% to 24.9%. Measured, not eyeballed. Trial only -
+     no production rule references it. */
+  var TEAL_DEEP = '#027d7d';
   var CREAM = '#FAFAF7';
   var RADIUS = '4px';
 
@@ -84,19 +89,32 @@
 
      Measured against white text/navy text at 11px uppercase, which is normal-size
      text by WCAG and so needs 4.5:1:
-       navy   #282E39 + white = 13.64:1  passes
-       teal   #03aeaf + navy  =  4.98:1  passes
-       orange #FF5500 + navy  =  4.25:1  marginal, fails 4.5
-       orange #FF5500 + white =  3.21:1  fails
-     Teal is the only fill that carries T's requested colour AND clears 4.5:1;
-     teal with WHITE text is 2.74:1 and is deliberately not offered.
+       navy      #282E39 + white = 13.64:1  passes
+       teal      #03aeaf + navy  =  4.98:1  passes
+       tealdeep  #027d7d + white =  4.96:1  passes
+       orange    #FF5500 + navy  =  4.25:1  marginal, fails 4.5
+       orange    #FF5500 + white =  3.21:1  fails
+       tealwhite #03aeaf + white =  2.74:1  fails
+
+     The two teals are inverses, and neither works both ways: Grace's own teal
+     carries NAVY text (white on it is 2.74:1), and the darkened one carries
+     WHITE text (navy on it is 2.75:1). So 'teal' and 'tealdeep' are not a light
+     and dark option for the same lockup - they are two different lockups that
+     happen to be the same hue.
+
+     tealwhite is T's literal request and fails the standard. It ships as a
+     variant because she asked to see it and comparing beats being told no;
+     tealdeep sits next to it as the passing version of the same idea. Neither
+     is a recommendation - the screenshots are.
      With no parameter the widget emits no extra CSS at all, so the default
      rendering stays byte-identical to today. */
   var PILL_VARIANTS = {
-    navy:   { bg: NAVY,   fg: '#FFFFFF' },
-    teal:   { bg: TEAL,   fg: NAVY },
-    orange: { bg: ORANGE, fg: NAVY },
-    white:  { bg: ORANGE, fg: '#FFFFFF' }
+    navy:      { bg: NAVY,      fg: '#FFFFFF' },
+    teal:      { bg: TEAL,      fg: NAVY },
+    tealwhite: { bg: TEAL,      fg: '#FFFFFF' },
+    tealdeep:  { bg: TEAL_DEEP, fg: '#FFFFFF' },
+    orange:    { bg: ORANGE,    fg: NAVY },
+    white:     { bg: ORANGE,    fg: '#FFFFFF' }
   };
   var PILL_VARIANT = (function () {
     var m = /[?&]ga-pill=([a-z]+)(?:&|$)/.exec(window.location.search);
