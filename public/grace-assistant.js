@@ -76,25 +76,41 @@
   var CREAM = '#FAFAF7';
   var RADIUS = '4px';
 
-  /* Launcher-pill colour trial for T, 2026-09-13. The pill is white with navy
-     text today and disappears against Grace's pale bands; a solid fill stops it
-     depending on what is behind it at all. Query-only, hyphenated, matching the
-     ?ga-route= idiom - window.location.search is the only environment this
-     widget has ever read.
+  /* DECISION, 2026-09-14: the default launcher pill is TEAL #03aeaf with WHITE
+     text. T chose it herself, having been shown the measured numbers and the
+     passing alternative in the same hue side by side. It was a choice between
+     rendered screenshots, not a default nobody looked at.
 
-     NOTE the variant names are T's, not a scheme: 'navy', 'orange' and 'teal'
-     name the FILL, 'white' names the TEXT (it is her literal request - orange
-     fill, white label). Do not rationalise them without asking her; the words
-     are what she will be shown alongside the screenshots.
+     IT DOES NOT MEET WCAG AA. 2.74:1 against the 4.5:1 that 11px uppercase
+     needs. That is recorded here so a later reader does not mistake it for an
+     oversight and quietly "fix" it - if it changes, it changes because T says
+     so. The nearest passing option in the same hue is ?ga-pill=tealdeep
+     (#027d7d + white, 4.96:1), and it is one line from here: swap TEAL for
+     TEAL_DEEP in the .launcher-pill rule.
 
-     Measured against white text/navy text at 11px uppercase, which is normal-size
-     text by WCAG and so needs 4.5:1:
+     What this deliberately gave up: until today, no parameter emitted no extra
+     CSS, so the default was provably byte-identical to the pre-trial widget.
+     That invariant existed to make the TRIAL safe to ship - it guaranteed a
+     colour experiment could not touch anyone who was not opted in. The trial is
+     over for this colour, the default is now a real decision, and the property
+     is spent. The probe that checked it has been updated to compare against the
+     new base rather than silently passing on a stale expectation. The variants
+     below still emit only their own override, so THAT half still holds.
+
+     Variant names are T's, not a scheme: 'navy', 'orange', 'teal' and
+     'tealdeep' name the FILL, 'white' and 'tealwhite' name the TEXT. Do not
+     rationalise them without asking her; they are the words on the links she is
+     comparing.
+
+     Measured against white text/navy text at 11px uppercase, which is
+     normal-size text by WCAG and so needs 4.5:1:
        navy      #282E39 + white = 13.64:1  passes
        teal      #03aeaf + navy  =  4.98:1  passes
        tealdeep  #027d7d + white =  4.96:1  passes
        orange    #FF5500 + navy  =  4.25:1  marginal, fails 4.5
        orange    #FF5500 + white =  3.21:1  fails
-       tealwhite #03aeaf + white =  2.74:1  fails
+       tealwhite #03aeaf + white =  2.74:1  fails   <-- NOW THE DEFAULT, by T's
+                                                        explicit choice
 
      The two teals are inverses, and neither works both ways: Grace's own teal
      carries NAVY text (white on it is 2.74:1), and the darkened one carries
@@ -102,12 +118,9 @@
      and dark option for the same lockup - they are two different lockups that
      happen to be the same hue.
 
-     tealwhite is T's literal request and fails the standard. It ships as a
-     variant because she asked to see it and comparing beats being told no;
-     tealdeep sits next to it as the passing version of the same idea. Neither
-     is a recommendation - the screenshots are.
-     With no parameter the widget emits no extra CSS at all, so the default
-     rendering stays byte-identical to today. */
+     ?ga-pill=tealwhite is kept even though it now equals the default: it is one
+     of the comparison links T is still using, and a link that silently stopped
+     existing mid-comparison would be worse than a redundant rule. */
   var PILL_VARIANTS = {
     navy:      { bg: NAVY,      fg: '#FFFFFF' },
     teal:      { bg: TEAL,      fg: NAVY },
@@ -257,8 +270,10 @@
     '  cursor: pointer; display: flex; align-items: center; gap: 10px;',
     '  flex: none; -webkit-tap-highlight-color: transparent;',
     '}',
+    /* Teal fill, white label. T chose this on 2026-09-14 - see the decision
+       note by PILL_VARIANTS. Same pair ?ga-pill=tealwhite produces. */
     '.launcher-pill {',
-    '  background: #FFFFFF; color: ' + NAVY + '; border-radius: 999px;',
+    '  background: ' + TEAL + '; color: #FFFFFF; border-radius: 999px;',
     '  font-family: ' + SANS_MED + '; padding: 9px 16px; font-size: 11px; font-weight: 500;',
     '  letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap;',
     '  box-shadow: 0 2px 8px rgba(40, 46, 57, 0.15);',
