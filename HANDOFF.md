@@ -108,6 +108,40 @@ id rather than editing the default.
 the widget shows its static follow-up chips and the guest notices nothing. This is
 proven live, and is the single most important property of the design.
 
+**It now has a second endpoint and a database.** Added 2026-09-15:
+
+| Path | Purpose |
+|---|---|
+| `POST /` | ranking, as above. Unchanged — the widget has always posted to the bare path, so it stays there. |
+| `POST /event` | usage telemetry. One validated event → one row in D1. |
+
+Binding `env.USAGE_DB` → D1 database **`grace-widget-usage`**
+(`f0d62985-5c9f-4811-8843-2d8fce7b3e07`, region ENAM). Schema is
+version-controlled at `worker/schema.sql` and the database can be rebuilt from
+it:
+
+```
+npx wrangler d1 execute grace-widget-usage --remote --file worker/schema.sql
+```
+
+Every statement is `IF NOT EXISTS`, so re-running it against the live database is
+a no-op rather than a data-loss event.
+
+`/event` follows the same two rules as the ranking endpoint: **same origin
+allowlist** (one list, one function — no Origin header is refused, so a bare
+`curl` writes nothing), and **always HTTP 200**. It never reports whether a row
+was written; row counts in D1 are how you check. Malformed events are dropped
+silently. Nothing beyond the schema is persisted — no IP, no headers, no
+identifier of any kind, and `ts`/`day` are generated server-side rather than
+trusted from the caller.
+
+**PLANNED, NOT YET BUILT:** a nightly cron on this same Worker to roll `events`
+up into `daily_stats`. When that lands the router becomes a **fetch _and_
+scheduled** Worker — one Worker owning both, deliberately, because two Workers
+would be two deploys, two log surfaces and one more thing to explain at handoff.
+It has no `scheduled` handler and no `[triggers]` block today; if you are looking
+for the cron and cannot find it, this is why.
+
 **Since 2026-08-27 the visible re-render is disabled** — chips reordering ~2s after
 a tap caused misclicks. The POST still happens as telemetry (`console.debug`,
 Chrome Verbose only). Re-enabling means designing a render-once flow first.

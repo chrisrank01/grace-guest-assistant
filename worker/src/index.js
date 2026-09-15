@@ -18,6 +18,15 @@
  *
  * The API key is read from env.ANTHROPIC_API_KEY (a Worker secret). It is never
  * hardcoded, never logged, and never echoed in a response.
+ *
+ * TWO ENDPOINTS, split on pathname:
+ *   POST /        ranking, as above. Unchanged.
+ *   POST /event   usage telemetry -> one row in D1 (env.USAGE_DB). Added
+ *                 2026-09-15. Same origin allowlist, same always-200 contract.
+ *
+ * The ranking endpoint is the bare path because that is what the widget has
+ * always posted to; adding a path for it would have been a breaking change for
+ * a file that is already deployed.
  */
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -110,6 +119,116 @@ function stringsOnly(value, limit) {
     }
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Usage telemetry                                                     */
+/* ------------------------------------------------------------------ */
+
+/* This endpoint is PUBLIC and UNAUTHENTICATED by necessity - a guest's browser
+   cannot hold a credential. Every field is therefore treated as hostile, and
+   every bound below exists to stop a crafted POST doing something the schema
+   did not intend. Anything that fails a check is dropped silently: logged,
+   answered 200, not written. A caller learns nothing about why. */
+
+const EVENT_KINDS = ['open', 'tap', 'close'];
+const EVENT_OUTCOMES = ['none', 'read', 'person', 'exhausted'];
+
+const MAX_ROUTE_LEN = 120;
+const MAX_QUESTION_ID_LEN = 64;
+/* A visit with more than 100 taps is not a person. Out-of-range values are
+   DROPPED rather than clamped - clamping would silently invent data, and a
+   position of 100 that was really 10^9 is worse than no row at all. */
+const MAX_POSITION = 100;
+const MAX_DEPTH = 100;
+/* A well-formed event is a couple of hundred bytes. Refuse to even parse
+   anything larger rather than burning CPU on a hostile body. */
+const MAX_EVENT_BODY_BYTES = 2048;
+
+function shortString(value, limit) {
+  return (typeof value === 'string' && value.length > 0 && value.length <= limit)
+    ? value
+    : null;
+}
+
+/* A whole number in [min, max], or null. Rejects floats, NaN, Infinity,
+   numeric strings and anything else - only a real integer in range passes. */
+function boundedInt(value, min, max) {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return null;
+  if (value < min || value > max) return null;
+  return value;
+}
+
+/**
+ * Whatever was posted -> a row this schema will accept, or null.
+ *
+ * ts and day are generated HERE, never taken from the caller. A client-supplied
+ * timestamp is hostile input: it would let anyone backdate rows into a closed
+ * reporting period, and it is not information the caller is better placed to
+ * know than we are.
+ */
+function toEventRow(body) {
+  if (!body || typeof body !== 'object') return null;
+
+  const kind = shortString(body.kind, 16);
+  if (!kind || EVENT_KINDS.indexOf(kind) === -1) return null;
+
+  /* Routes in this system are always normalised paths. Requiring the leading
+     slash is stricter than "must be a string" on purpose - it costs a real
+     caller nothing and rejects a whole class of junk. */
+  const route = shortString(body.route, MAX_ROUTE_LEN);
+  if (!route || route.charAt(0) !== '/') return null;
+
+  const questionId = shortString(body.question_id, MAX_QUESTION_ID_LEN);
+  const position = boundedInt(body.position, 1, MAX_POSITION);
+  const depth = boundedInt(body.depth, 0, MAX_DEPTH);
+  const outcome = shortString(body.outcome, 16);
+
+  /* Per-kind requirements. A tap without a question is not a tap - recording it
+     would put a row in the table that no query can make sense of. */
+  if (kind === 'tap' && (!questionId || position === null)) return null;
+  if (outcome !== null && EVENT_OUTCOMES.indexOf(outcome) === -1) return null;
+  if (kind !== 'close' && (depth !== null || outcome !== null)) return null;
+  if (kind === 'open' && (questionId !== null || position !== null)) return null;
+
+  const now = new Date();
+  const ts = now.toISOString();
+
+  return {
+    ts,
+    day: ts.slice(0, 10),          // YYYY-MM-DD, UTC, same instant as ts
+    kind,
+    route,
+    question_id: questionId,
+    position: kind === 'tap' ? position : null,
+    depth: kind === 'close' ? depth : null,
+    outcome: kind === 'close' ? outcome : null
+  };
+}
+
+/**
+ * One validated event -> one row. Never throws: a telemetry failure must not be
+ * something a guest can notice, so every problem is logged and swallowed.
+ *
+ * Nothing beyond the schema is persisted. No IP, no headers, no user agent, no
+ * identifier of any kind - see the header of worker/schema.sql for why that is a
+ * commitment rather than an oversight.
+ */
+async function writeEvent(db, row) {
+  try {
+    await db
+      .prepare(
+        'INSERT INTO events (ts, day, kind, route, question_id, position, depth, outcome) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
+      .bind(row.ts, row.day, row.kind, row.route,
+            row.question_id, row.position, row.depth, row.outcome)
+      .run();
+    return true;
+  } catch (err) {
+    console.log('usage write failed:', err && err.name ? err.name : 'error');
+    return false;
+  }
 }
 
 /**
@@ -235,6 +354,46 @@ function filterToApproved(ids, candidateIds, tappedId) {
   return out.length >= MIN_IDS ? out : [];
 }
 
+/**
+ * POST /event - record one usage event.
+ *
+ * ALWAYS 200 { ok: true }, whatever happened. The response deliberately does not
+ * say whether a row was written: a guest must never be able to notice telemetry
+ * failing, and a hostile caller must not learn which of its fields was rejected.
+ * Row counts in D1 are the way to check this worked, not the response body.
+ */
+async function handleEvent(request, env) {
+  const ok = () => jsonResponse({ ok: true }, request);
+
+  // Same lock as the ranking endpoint, same function - not a second copy of the
+  // list. No Origin at all is refused here exactly as it is there.
+  if (!originAllowed(request)) {
+    console.log('usage guard: origin-not-allowed');
+    return ok();
+  }
+
+  const declared = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declared) && declared > MAX_EVENT_BODY_BYTES) {
+    console.log('usage guard: body-too-large');
+    return ok();
+  }
+
+  const body = await request.json().catch(() => null);
+  const row = toEventRow(body);
+  if (!row) {
+    console.log('usage guard: malformed-dropped');
+    return ok();
+  }
+
+  if (!env || !env.USAGE_DB) {
+    console.log('usage guard: no-binding');
+    return ok();
+  }
+
+  await writeEvent(env.USAGE_DB, row);
+  return ok();
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -245,6 +404,19 @@ export default {
       // Anything that is not a POST still gets the fallback contract, not an error.
       if (request.method !== 'POST') {
         return empty(request);
+      }
+
+      // Split on pathname. Everything that is not /event falls through to the
+      // ranking endpoint below, so the bare path the widget has always posted to
+      // behaves exactly as it did before this endpoint existed.
+      let pathname = '/';
+      try {
+        pathname = new URL(request.url).pathname;
+      } catch (err) {
+        pathname = '/';
+      }
+      if (pathname === '/event' || pathname === '/event/') {
+        return await handleEvent(request, env);
       }
 
       // Budget lock. Nothing past this point can reach the Anthropic API unless
@@ -288,6 +460,8 @@ export default {
     } catch (err) {
       // Deliberately swallowed. The widget degrades to its static follow-ups,
       // and nothing about the key or the request is written to the log.
+      // handleEvent already swallows its own failures, so reaching here from
+      // /event means something truly unexpected - still a 200, still silent.
       console.log('router fallback:', err && err.name ? err.name : 'error');
       return empty(request);
     }

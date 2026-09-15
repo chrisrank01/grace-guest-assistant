@@ -1,3 +1,16 @@
 name = "grace-assistant-router"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
+
+# Usage database. Schema lives in worker/schema.sql and is version-controlled, so
+# the database can be rebuilt from this repo:
+#   npx wrangler d1 execute grace-widget-usage --remote --file worker/schema.sql
+#
+# The binding arrives as env.USAGE_DB. It is the FIRST binding this Worker has
+# ever had; ANTHROPIC_API_KEY is a Worker secret and lives outside this file
+# (secrets survive code deploys - proven on this Worker's own history, where the
+# key was set once and five later uploads left it intact).
+[[d1_databases]]
+binding = "USAGE_DB"
+database_name = "grace-widget-usage"
+database_id = "f0d62985-5c9f-4811-8843-2d8fce7b3e07"
