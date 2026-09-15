@@ -131,6 +131,85 @@ function stringsOnly(value, limit) {
    did not intend. Anything that fails a check is dropped silently: logged,
    answered 200, not written. A caller learns nothing about why. */
 
+/* ===================================================================== */
+/* THE PAYLOAD CONTRACT — POST /event                                    */
+/* ===================================================================== */
+/*
+ * Part 2 (the widget) is written against THIS. Get it wrong and nothing
+ * complains: the endpoint answers 200, drops the row, and the first symptom is
+ * an empty dashboard weeks later. So this block was DERIVED BY PROBING the
+ * functions below, not written from memory, and re-derived whenever they change.
+ *
+ * Minimal accepted bodies:
+ *   open   {"kind":"open",  "route":"/giving/"}
+ *   tap    {"kind":"tap",   "route":"/giving/", "question_id":"how-to-give",
+ *           "position":1}
+ *   close  {"kind":"close", "route":"/giving/"}
+ *
+ * FIELD BY KIND
+ *   field        | open      | tap       | close
+ *   -------------|-----------|-----------|----------
+ *   kind         | REQUIRED  | REQUIRED  | REQUIRED
+ *   route        | REQUIRED  | REQUIRED  | REQUIRED
+ *   question_id  | FORBIDDEN | REQUIRED  | optional
+ *   position     | FORBIDDEN | REQUIRED  | ignored
+ *   depth        | FORBIDDEN | FORBIDDEN | optional
+ *   outcome      | FORBIDDEN | FORBIDDEN | optional
+ *
+ *   FORBIDDEN means the WHOLE EVENT IS DROPPED if the field is present - not
+ *   that the field is ignored. Sending question_id on an open loses the open.
+ *   "ignored" means accepted and silently discarded (a close may carry position;
+ *   it is never stored).
+ *
+ * BOUNDS
+ *   kind         exactly 'open' | 'tap' | 'close'. Case-sensitive.
+ *   route        string, 1..120 chars, MUST START WITH '/'. "giving" is dropped.
+ *   question_id  string, 1..64 chars.
+ *   position     integer 1..100. Floats, numeric strings and NaN all fail.
+ *   depth        integer 0..100.
+ *   outcome      exactly 'none' | 'read' | 'person' | 'exhausted'.
+ *   body         2048 bytes max, refused before parsing (Content-Length).
+ *
+ * *** THE ASYMMETRY THAT WILL BITE SOMEONE ***
+ *   Out-of-range POSITION drops the whole tap, because a tap requires position.
+ *   Out-of-range DEPTH does NOT drop the close - the row is written with depth
+ *   NULL, because depth is optional and an unusable value reads the same as an
+ *   absent one. Same for a non-string outcome (123 -> NULL) and an empty one
+ *   ('' -> NULL). An outcome that is a string but not in the enum ('exploded')
+ *   DOES drop the whole event.
+ *
+ *   So: depth=150 on a close is not an error you will see. It is a close row
+ *   with no depth in it, and the "where do people stop" metric quietly loses
+ *   that visit. THE WIDGET MUST CLAMP DEPTH TO 0..100 BEFORE SENDING.
+ *   (Tightening this to drop the event instead was considered and not done -
+ *   losing the whole close would cost more than losing one field.)
+ *
+ * SERVER-GENERATED — SEND THESE AND THEY ARE IGNORED
+ *   ts    ISO8601 UTC, from the Worker's clock at write time.
+ *   day   YYYY-MM-DD, sliced from that same ts so the two can never disagree.
+ *   id    SQLite AUTOINCREMENT.
+ *   A caller-supplied ts is not merely redundant, it is refused on purpose: it
+ *   would let anyone backdate rows into a closed reporting period. Verified -
+ *   posting ts=1999-01-01 stores today.
+ *
+ * NEVER PERSISTED, whatever is sent
+ *   Unknown fields are dropped on the floor: a POST carrying {"ip":"1.2.3.4",
+ *   "evil":"x"} writes a row with neither. No IP, no headers, no user agent, no
+ *   identifier of any kind. The schema is the entire contract; see the header of
+ *   worker/schema.sql for why that is a commitment and not an oversight.
+ *
+ * RESPONSE
+ *   Always 200 {"ok":true}. It does NOT indicate whether a row was written, by
+ *   design - a guest must never notice telemetry failing, and a hostile caller
+ *   must not learn which field was rejected. To check it worked, count rows in
+ *   D1. A 200 is not a receipt.
+ *
+ * ORIGIN
+ *   Same allowlist as the ranking endpoint, same function, one list. NO Origin
+ *   header is refused, so a bare curl writes nothing - manual testing needs
+ *   -H "Origin: https://discovergrace.com".
+ */
+
 const EVENT_KINDS = ['open', 'tap', 'close'];
 const EVENT_OUTCOMES = ['none', 'read', 'person', 'exhausted'];
 
