@@ -68,10 +68,45 @@ CREATE TABLE IF NOT EXISTS events (
   kind        TEXT    NOT NULL,   -- 'open' | 'tap' | 'close'
   route       TEXT    NOT NULL,   -- e.g. /plan-your-visit/
   question_id TEXT,               -- tap: which question. close: the last one seen.
-  position    INTEGER,            -- tap: 1,2,3... within this visit
-  depth       INTEGER,            -- close: how many questions this visit
+  position    INTEGER,            -- tap: 1,2,3... within this visit (1..100)
+  depth       INTEGER,            -- close: how many questions this visit (0..100)
+                                  -- -1 = THE CALLER SENT AN UNUSABLE VALUE. See
+                                  -- the note below. NULL = none was reported.
   outcome     TEXT                -- close: 'none'|'read'|'person'|'exhausted'
+                                  -- 'invalid' = unusable value sent, as above.
+                                  -- NULL = none was reported.
 );
+
+-- ---------------------------------------------------------------------------
+-- depth = -1 AND outcome = 'invalid' ARE BUG REPORTS, NOT DATA
+-- ---------------------------------------------------------------------------
+-- When a close arrives with a depth or outcome that is present but fails its
+-- bounds, the row is written with the field set to these markers rather than
+-- being clamped, nulled, or dropped. Each of the alternatives loses something:
+--
+--   clamping  invents data - a depth of 100 that was really 10^9 is a lie that
+--             averages into every report thereafter
+--   NULL      is indistinguishable from "no depth was reported", so the failure
+--             becomes invisible and the visit silently leaves the metric
+--   dropping  loses the whole close, and a row that was never written cannot be
+--             counted either - equally invisible, and costlier
+--
+-- The markers keep the failure COUNTABLE. Neither value can be produced by a
+-- guest; both can only come from a caller sending something the contract
+-- forbids.
+--
+-- RULES FOR THE DASHBOARD:
+--   * depth = -1 is its own bucket. NEVER average or sum depth without
+--     excluding it:  WHERE depth >= 0
+--   * outcome = 'invalid' is its own bucket. Never fold it into 'none'.
+--   * A RISING COUNT OF EITHER MEANS THE WIDGET IS BROKEN. It is not a fact
+--     about guests and must not be reported as one. Worth a standing check:
+--       SELECT day, COUNT(*) FROM events
+--        WHERE kind='close' AND (depth = -1 OR outcome = 'invalid')
+--        GROUP BY day;
+--
+-- position has no equivalent marker and should not gain one: a tap REQUIRES
+-- position, so an unusable one leaves no row to mark and the tap is dropped.
 
 -- Serves the nightly rollup (one day at a time, split by kind), every
 -- kind-filtered aggregate, and the one-year retention DELETE. day is the leading
