@@ -135,6 +135,36 @@ silently. Nothing beyond the schema is persisted — no IP, no headers, no
 identifier of any kind, and `ts`/`day` are generated server-side rather than
 trusted from the caller.
 
+**COUNTING IS ON FOR THE DEMO as of 2026-09-16.** Both demo pages carry
+`data-events="https://grace-assistant-router.relax-tech.workers.dev/event"`
+alongside their existing attributes. **The live site does not** — no embed on
+discovergrace.com carries the attribute, so nothing there is counted. The two
+switches are independent by design.
+
+**EVERY ROW IN `events` DATED 2026-09-16 IS RTS TEST DATA, NOT GUEST BEHAVIOUR.**
+Twenty-one rows from four scripted walks. Exclude them from any rollup or report:
+
+```sql
+-- real guest behaviour only
+WHERE NOT (ts >= '2026-09-16T00:00:00Z' AND ts < '2026-09-17T00:00:00Z')
+```
+
+Verified at the time: that predicate matched 21 of 21 rows, leaving 0. It is
+dated rather than flagged because the schema has no column to flag with, and
+adding one would mean a column that exists only to describe rows we made — the
+date does the job and costs nothing.
+
+**If you test again, note the date here**, or the exclusion silently stops being
+complete. That is the failure mode of a date-based marker and it is the price of
+not adding a column.
+
+**Distinguishing test from guest, generally:** demo traffic is the only traffic
+until the attribute is added to the live embed, so before that day every row is
+ours. Afterwards, demo and live rows are indistinguishable in the table — they
+carry the same routes and no origin is recorded. If they ever need telling apart
+for real, that is a reason to add a `source` column, and it should be discussed
+before it is done.
+
 **PLANNED, NOT YET BUILT:** a nightly cron on this same Worker to roll `events`
 up into `daily_stats`. When that lands the router becomes a **fetch _and_
 scheduled** Worker — one Worker owning both, deliberately, because two Workers
