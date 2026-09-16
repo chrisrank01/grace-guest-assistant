@@ -37,6 +37,74 @@
   var ROUTER_URL = script.getAttribute('data-router') || '';
   var ROUTER_TIMEOUT_MS = 2000;
 
+  /* Optional usage counting. Empty string = NOTHING IS EVER SENT, not one
+     request. Deliberately a separate attribute from data-router so counting and
+     AI ranking are independent switches: the demo can count while the live site
+     does not, or the reverse. Added 2026-09-16.
+
+     The payload contract is the block marked (probed) in worker/src/index.js.
+     It is the measured truth; read it before changing anything here. The two
+     rules it enforces that are easy to get wrong from this side:
+       - a field that is FORBIDDEN for a kind kills the WHOLE EVENT if present,
+         so each kind's body is built field by field rather than from one shape
+         with nulls filled in;
+       - position and depth are bounded, and out of bounds is not forgiving:
+         a bad position drops the tap, a bad depth writes a -1 bug marker. The
+         widget clamps before sending so neither is ever our doing.
+
+     NOTHING HERE IDENTIFIES ANYONE. No id, no cookie, no storage, nothing that
+     survives the pageview - a written commitment to Grace, not a preference. */
+  var EVENTS_URL = script.getAttribute('data-events') || '';
+
+  var EVENT_MAX_POSITION = 100;   // contract: position is integer 1..100
+  var EVENT_MAX_DEPTH = 100;      // contract: depth is integer 0..100
+
+  /* Fire and forget, the same contract the ranking call already keeps: never
+     awaited, never blocking a render, and every failure path silent. A guest
+     must not be able to tell whether this worked.
+
+     sendBeacon first because it is the only thing the platform offers that
+     survives the page going away. The Blob is text/plain ON PURPOSE: it is a
+     CORS-safelisted content type, so the request is "simple" and needs no
+     preflight - and sendBeacon cannot preflight. The Worker parses the body
+     with request.json() regardless of the declared type, so JSON in a
+     text/plain wrapper is exactly what it wants.
+
+     fetch(keepalive) is the fallback for when sendBeacon is absent or refuses
+     (it returns false once the browser's queue is full). */
+  function sendEvent(payload) {
+    if (!EVENTS_URL) return;
+    var body;
+    try {
+      body = JSON.stringify(payload);
+    } catch (err) {
+      return;
+    }
+    try {
+      if (navigator.sendBeacon) {
+        var blob = new Blob([body], { type: 'text/plain' });
+        if (navigator.sendBeacon(EVENTS_URL, blob)) return;
+      }
+    } catch (err) { /* fall through to fetch */ }
+    try {
+      fetch(EVENTS_URL, {
+        method: 'POST',
+        body: body,
+        keepalive: true,
+        headers: { 'Content-Type': 'text/plain' }
+      }).catch(function () { /* silent by contract */ });
+    } catch (err) { /* silent by contract */ }
+  }
+
+  /* Contract: position 1..100, depth 0..100, both integers. Out of range is
+     never forgiving at the other end, so clamp here and let the server's
+     markers mean "the widget is broken" rather than "a guest was unusual". */
+  function clampInt(value, min, max) {
+    var n = Math.round(Number(value));
+    if (!isFinite(n)) return min;
+    return n < min ? min : (n > max ? max : n);
+  }
+
   /* A tapped question does not come back. This shipped behind ?ga-hide-tapped=1
      from 2026-09-07 and became the default on 2026-09-13 once T had approved it
      and the wording below could come from the Sheet. The flag, and the
@@ -580,6 +648,88 @@
     var tapped = {};
     var exhausted = false; /* latch - the handoff fires at most once per pass */
 
+    /* Usage counters. Same lifetime as everything else here - this pageview, in
+       memory, gone on reload. Nothing about them identifies anyone; they are
+       three numbers and a slug.
+
+       They do NOT reset when the panel closes and reopens, because position is
+       defined as "the Nth thing tapped in this pageview". `Start over` does not
+       reset them either: it resets what the GUEST sees, and it would be a lie to
+       tell the database a visit began again because someone cleared the card. */
+    var usageTaps = 0;          // every tap, talk-person included
+    var usageQuestions = 0;     // real questions only - this is what depth means
+    var usageLast = null;       // last question_id tapped, for the close row
+    var usageOpenSent = false;  // latch, so one open yields at most one close
+
+    /* talk-person IS counted as a tap. "They went straight to a person" is one
+       of the three things Grace asked for, and it is only answerable if the tap
+       is recorded with the position it happened at.
+       It is NOT counted as a question, which is why there are two counters:
+       `position` says when it happened, `depth` says how many answers were
+       actually read. A visit that opened, tapped Talk to a person and left is
+       position=1, depth=0 - and that reads correctly in both metrics.
+       Any question-level query must therefore exclude it:
+           WHERE question_id != 'talk-person' */
+    function usageTap(id) {
+      if (!EVENTS_URL) return;
+      usageTaps += 1;
+      if (id !== TALK_PERSON_ID) {
+        usageQuestions += 1;
+        usageLast = id;
+      }
+      /* Past the contract's ceiling there is no honest position left to send,
+         so stop sending taps rather than send a clamped one that would claim
+         the 140th tap was the 100th. The open and close still go. */
+      if (usageTaps > EVENT_MAX_POSITION) return;
+      sendEvent({
+        kind: 'tap',
+        route: routePath,
+        question_id: String(id).slice(0, 64),
+        position: clampInt(usageTaps, 1, EVENT_MAX_POSITION)
+      });
+    }
+
+    /* Outcome precedence, most specific first:
+         none      nothing was tapped at all
+         person    the last thing they did was reach for a human
+         exhausted they ran out of questions and did not then ask for a person
+         read      anything else - they were reading answers when they left
+       `person` beats `exhausted` because it is the later and more actionable
+       fact: the handoff worked. */
+    function usageOutcome() {
+      if (usageTaps === 0) return 'none';
+      if (lastTapWasPerson) return 'person';
+      if (exhausted) return 'exhausted';
+      return 'read';
+    }
+
+    var lastTapWasPerson = false;
+
+    function usageOpen() {
+      if (!EVENTS_URL || usageOpenSent) return;
+      usageOpenSent = true;
+      sendEvent({ kind: 'open', route: routePath });
+    }
+
+    /* At most one close per open. Both the panel closing and the page going away
+       call this, and on a normal visit both happen - the latch is what stops
+       that being two rows. */
+    function usageClose() {
+      if (!EVENTS_URL || !usageOpenSent) return;
+      usageOpenSent = false;
+      var payload = {
+        kind: 'close',
+        route: routePath,
+        depth: clampInt(usageQuestions, 0, EVENT_MAX_DEPTH),
+        outcome: usageOutcome()
+      };
+      /* question_id is optional on a close. Omitted rather than sent null when
+         nothing was tapped - the contract stores an absent field as NULL, and
+         building it conditionally keeps that the only way it can happen. */
+      if (usageLast) payload.question_id = String(usageLast).slice(0, 64);
+      sendEvent(payload);
+    }
+
     var host = document.createElement('div');
     host.setAttribute('data-grace-assistant', '');
     var root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
@@ -933,6 +1083,8 @@
          from the lists this same render builds. talk-person is exempt: it is a
          pinned action and must never count toward exhaustion. */
       if (id !== TALK_PERSON_ID) tapped[id] = true;
+      lastTapWasPerson = (id === TALK_PERSON_ID);
+      usageTap(id);
 
       /* Clear first - this view is the whole card, not another entry in a log. */
       feed.textContent = '';
@@ -1010,6 +1162,7 @@
       launcherPill.style.display = 'none';
       launcher.setAttribute('aria-label', 'Close');
       requestAnimationFrame(function () { panel.classList.add('is-open'); });
+      usageOpen();
       /* If the guest closed the panel mid-card, reopening should not flash the
          old scroll position before they can read the top. */
       resetScroll();
@@ -1019,6 +1172,7 @@
     function close() {
       if (!isOpen) return;
       isOpen = false;
+      usageClose();
       panel.classList.remove('is-open');
       wrap.classList.remove('is-open');
       launcher.setAttribute('aria-expanded', 'false');
@@ -1051,6 +1205,36 @@
     root.addEventListener('keydown', function (event) {
       if (event.key === 'Escape' && isOpen) { event.stopPropagation(); close(); }
     });
+
+    /* The close event is the unreliable one, by nature. These two are the most
+       that the platform offers, and they are still not a guarantee:
+         visibilitychange->hidden  fires when the tab is backgrounded, switched
+                                   away from, or the phone is locked. It is the
+                                   most reliable signal there is, and on mobile
+                                   it is often the ONLY one that fires.
+         pagehide                  fires on navigation away, and unlike unload it
+                                   does not disqualify the page from the back/
+                                   forward cache.
+       `unload` is deliberately NOT used: it is the least reliable of the three
+       and listening for it breaks bfcache, which would make the site slower to
+       fix telemetry. That is the wrong trade.
+
+       KNOWN FAILURE MODES, so nobody reads a close count as a visit count:
+         - a browser or tab that is force-killed, crashes, or is OOM-reaped
+           fires nothing at all;
+         - iOS Safari has historically dropped beacons on backgrounding, and
+           still does under memory pressure;
+         - sendBeacon returns false once the queue is full, and the fetch
+           fallback is itself cancellable;
+         - a guest who leaves the panel open and walks away produces a close only
+           when the tab is finally closed, which may be days later or never.
+       Expect closes to under-count opens. A close/open ratio below 1 is normal
+       and is not evidence of a bug. */
+    var onLeave = function () {
+      if (document.visibilityState === 'hidden') usageClose();
+    };
+    document.addEventListener('visibilitychange', onLeave);
+    window.addEventListener('pagehide', function () { usageClose(); });
 
     seed();
   }
