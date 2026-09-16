@@ -273,6 +273,104 @@ The demo loads the widget from `grace-assistant.pages.dev`, so content publishes
 reach it automatically with no demo redeploy. **Teardown candidate after the
 pilot decision.**
 
+### Usage dashboard
+
+`https://widget.discovergrace.ai` — Pages project **`grace-widget-dashboard`**,
+direct upload from `dashboard/`. Also answers on
+`grace-widget-dashboard.pages.dev`.
+
+One file, `dashboard/index.html`, ~217KB. No build step and no dependencies: four
+woff2 faces (Quincy CF, Greycliff Regular and DemiBold, Interstate Bold) are
+embedded as base64 and Grace's wordmark is inlined SVG, **so the page does not
+depend on discovergrace.com for type or logo**. Do not "optimise" either into a
+link; the dashboard has to render when the church site does not.
+
+**Three tabs:** the verdict (what to change), every question (per page, per
+question), over time (how conversations ended).
+
+**What it reads — two fetches, no others:**
+
+| Source | For |
+|---|---|
+| `GET /stats` on the router Worker | all the numbers — `daily_stats` only, **never `events`** |
+| `answers.json` on `assistant.discovergrace.ai` | the opening list (`starters`) and question wording |
+
+Each page's full question set is a breadth-first walk from its starters along
+`followups` — the same rule `publish.py` validates, so the dashboard and the
+publisher agree on what "on this page" means. `talk-person` is removed after the
+walk and appears only as the "asked for a person" figure, never in a ranking.
+
+**The three actions, and their thresholds.** Set as constants at the top of the
+script block in `dashboard/index.html`, and **stated on the page in plain
+language** so a reader never has to ask what "few taps" means:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `DEMAND_SHARE` | `0.05` | A question is wanted if it draws **one tap in twenty** on its page. A share, not a count, so a busy page and a quiet one are held to the same standard. |
+| `VERDICT_MIN_TAPS` | `40` | No page is judged below this. Under 40 a single tap moves a question across the line and the verdict is noise. |
+| `CHART_MIN` | `40` | The daily line is not drawn below this many conversations. |
+
+The classification is deliberately asymmetric and this is the part most easily
+got wrong: **on the opening list with few taps is a Rewrite** — everyone was
+offered it and ignored it. **Off the list with few taps is No verdict yet** — it
+was never really offered. The same zero means opposite things.
+
+Swap instructions are **generated**, never hardcoded: the real page name, the
+real slugs, and the outgoing candidate chosen as the least-tapped question on the
+opening list. A full list (5 of 5) produces a swap naming both questions; a list
+with room says the question can be added outright.
+
+**`SOURCE` — one constant, at the top of the script block.** Currently `'demo'`,
+sent as `?source=demo`, so the dashboard shows the demo embed's traffic only.
+**Change it to `'live'` at go-live**, when the live embed starts sending. It is
+the single line that decides whose numbers are on screen; nothing else needs
+touching.
+
+**Four states, all real rather than drawn:**
+
+1. **Almost no data** — under `VERDICT_MIN_TAPS` a page gets no verdict and the
+   panel says so with the actual figures. Under `CHART_MIN` the daily line is not
+   drawn. This is what the page shows today.
+2. **A page with no taps** — a dashed resting card. Nothing yet, not failing.
+3. **A fault** — driven by the `alarms` block from `/stats` (`invalid_depth`,
+   `invalid_outcome`). **If both are zero the panel does not render at all.**
+   These are bug reports about the widget, never facts about guests.
+4. **`/stats` unreachable** — a banner and an explicit "this is a loading
+   failure, not an empty week". It never shows an empty page that could be
+   mistaken for a reading of zero.
+
+**The banner reports the span of days that hold data, not the query window.** The
+page asks `/stats` for 90 days; only some of those days have rows. Saying "29
+conversations from 19 June to 16 September" was true of the query and false about
+the assistant — a reader would take it to mean barely used, when all 29 happened
+in one day. It now says "29 conversations, all on 16 Sep 2026". **If you add a
+range picker, keep that distinction.**
+
+**Access, and the preview-URL hole.** The app protects
+`widget.discovergrace.ai` and `grace-widget-dashboard.pages.dev`; both return a
+302 to the Cloudflare Access login, which is how you check the protection is on.
+
+**Cloudflare Pages also mints a per-deployment preview URL —
+`<8-hex>.grace-widget-dashboard.pages.dev` — and those are NOT covered by an
+Access app that lists only the two hostnames.** They return 200 to anyone who
+knows the id, and every deploy mints another. Adding
+`*.grace-widget-dashboard.pages.dev` as a hostname on the app closes it, which is
+how the `grace-demo` app has always been configured. Worth knowing in both
+directions: it is also why a preview URL is the only way to verify deployed
+*content* by md5, since the front door returns a redirect rather than the page.
+
+**The approved design** is `grace-dashboard-APPROVED.html`, md5
+`21cc87ca1377b42689014315e271fdd7`, deliberately **not** in the working tree —
+two copies of a design is how they drift. It is in git history:
+
+```
+git log --all --diff-filter=A -- dashboard/grace-dashboard-APPROVED.html
+git show <that commit>:dashboard/grace-dashboard-APPROVED.html > approved.html
+```
+
+`index.html` was verified against it: all four font blobs byte-identical, the
+wordmark identical, the approved CSS present verbatim.
+
 ### Source of truth — the Sheet
 
 **grace-assistant-corpus-2026-08-27** (that is the file's actual title — searching
