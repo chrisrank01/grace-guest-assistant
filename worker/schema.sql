@@ -72,9 +72,15 @@ CREATE TABLE IF NOT EXISTS events (
   depth       INTEGER,            -- close: how many questions this visit (0..100)
                                   -- -1 = THE CALLER SENT AN UNUSABLE VALUE. See
                                   -- the note below. NULL = none was reported.
-  outcome     TEXT                -- close: 'none'|'read'|'person'|'exhausted'
+  outcome     TEXT,               -- close: 'none'|'read'|'person'|'exhausted'
                                   -- 'invalid' = unusable value sent, as above.
                                   -- NULL = none was reported.
+  source      TEXT    NOT NULL DEFAULT ''
+                                  -- which embed sent it: 'demo' | 'live'.
+                                  -- '' = the sender declared none.
+                                  -- 'invalid' = an unknown value was sent.
+                                  -- REPLACES identifying test data by date; see
+                                  -- worker/migrations/001-source-column.sql.
 );
 
 -- ---------------------------------------------------------------------------
@@ -120,6 +126,12 @@ CREATE INDEX IF NOT EXISTS idx_events_day_kind
 CREATE INDEX IF NOT EXISTS idx_events_question_day
   ON events (question_id, day);
 
+-- Serves "show me only the live embed, over time" - the split that source
+-- exists for. The nightly rollup groups by source, so it reads through
+-- idx_events_day_kind and this one is for ad-hoc queries.
+CREATE INDEX IF NOT EXISTS idx_events_source_day
+  ON events (source, day);
+
 -- ---------------------------------------------------------------------------
 -- daily_stats — precomputed. THE DASHBOARD READS THIS AND NEVER events.
 -- ---------------------------------------------------------------------------
@@ -141,6 +153,7 @@ CREATE INDEX IF NOT EXISTS idx_events_question_day
 -- so running it twice is a no-op. Write '' for absent, never NULL.
 CREATE TABLE IF NOT EXISTS daily_stats (
   day         TEXT    NOT NULL,
+  source      TEXT    NOT NULL DEFAULT '',   -- 'demo' | 'live' | '' | 'invalid'
   route       TEXT    NOT NULL,
   question_id TEXT    NOT NULL DEFAULT '',   -- '' = metric is not per-question
   metric      TEXT    NOT NULL,              -- see the full list below
@@ -149,11 +162,13 @@ CREATE TABLE IF NOT EXISTS daily_stats (
                                              -- |'invalid_depth'|'invalid_outcome'
   outcome     TEXT    NOT NULL DEFAULT '',   -- '' = metric is not per-outcome
   value       INTEGER NOT NULL,
-  PRIMARY KEY (day, route, question_id, metric, outcome)
+  PRIMARY KEY (day, source, route, question_id, metric, outcome)
 );
 
 -- THE METRICS, and what each row means. Written by the nightly rollup in
 -- worker/src/index.js; the dashboard should know no others.
+-- Every metric is ALSO per source, which is the first column of the key after
+-- day: demo traffic and live traffic never mix in one row.
 --   opens / closes    per route. question_id='' outcome=''
 --   taps              per route per question. question_id=<slug> outcome=''
 --   first_taps        as taps, but position=1 only
@@ -168,6 +183,28 @@ CREATE TABLE IF NOT EXISTS daily_stats (
 --   invalid_outcome   note above. 'invalid' also appears under outcomes on
 --                     purpose: that view stays honest about what is in the
 --                     table, these two are the alarm.
+--
+-- *** CLOSES ARE NOT VISITS. DO NOT COMPUTE A PER-VISIT AVERAGE FROM THEM. ***
+-- One pageview can produce several closes. The widget's counters are scoped to
+-- the PAGEVIEW and deliberately do not reset when the panel is closed and
+-- reopened, because `position` is defined as "the Nth thing tapped in this
+-- pageview". So a guest who taps twice, closes the panel, reopens it and closes
+-- again produces TWO close rows, the second reporting the same cumulative
+-- depth=2 with no new taps between them. Seen in real traffic on 2026-09-16,
+-- rows 77-78: an open with no tap, then a close carrying depth=2 and a
+-- question_id from two minutes earlier.
+--
+-- Consequences: SUM(depth) over closes double-counts, and AVG(depth) is
+-- meaningless. `closes` and `outcomes` remain honest as "moments a guest
+-- stopped", which is what they are named for. There is no identifier linking
+-- rows, BY DESIGN, so you cannot tell which closes belong to one pageview and
+-- cannot correct for it after the fact.
+--
+-- THE FIX, NOT IMPLEMENTED: the widget could send depth SINCE THE LAST CLOSE
+-- rather than cumulative, which would make closes additive. That is a behaviour
+-- change to a shipped contract - old and new rows would mean different things
+-- with nothing in the row to say which - so it needs its own pass, a cutover
+-- date, and probably a source value to tell the eras apart.
 --
 -- A metric with a count of zero produces NO ROW rather than a row of 0. Absence
 -- is zero. That matters most for the two invalid_* metrics: a row appearing at

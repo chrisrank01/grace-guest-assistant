@@ -172,6 +172,7 @@ function stringsOnly(value, limit) {
  *   position     | FORBIDDEN | REQUIRED  | ignored  
  *   depth        | FORBIDDEN | FORBIDDEN | optional 
  *   outcome      | FORBIDDEN | FORBIDDEN | optional 
+ *   source       | optional  | optional  | optional 
  *
  * BOUNDS  (probed)
  *   kind         exactly 'open' | 'tap' | 'close'. Case-sensitive.
@@ -211,10 +212,23 @@ function stringsOnly(value, limit) {
  *     tap position=0             -> EVENT DROPPED
  *     tap position=1.5           -> EVENT DROPPED
  *
+ * SOURCE - which embed sent it  (probed)
+ *   allowlist: ["demo","live"]. Accepted on EVERY kind - it
+ *   describes the sender, not the event, so it is not in the per-kind rules.
+ *
+ *     source="demo"                -> source="demo"
+ *     source="live"                -> source="live"
+ *     source="DEMO"                -> source="invalid"
+ *     source="staging"             -> source="invalid"
+ *     source=""                    -> source="invalid"
+ *     source=123                   -> source="invalid"
+ *     source=null                  -> source=""
+ *     source=(absent)              -> source=""
+ *
  * SERVER-GENERATED - SEND THESE AND THEY ARE IGNORED  (probed)
  *   sent ts=1999-01-01T00:00:00.000Z day=1999-01-01 id=999
- *   stored ts=2026-09-15... day=2026-09-15   id absent (SQLite AUTOINCREMENT)
- *   row keys: ["ts","day","kind","route","question_id","position","depth","outcome"]
+ *   stored ts=2026-09-16... day=2026-09-16   id absent (SQLite AUTOINCREMENT)
+ *   row keys: ["ts","day","kind","route","source","question_id","position","depth","outcome"]
  *   A caller-supplied ts is refused on purpose: it would let anyone backdate
  *   rows into a closed reporting period.
  *
@@ -238,6 +252,20 @@ function stringsOnly(value, limit) {
 
 const EVENT_KINDS = ['open', 'tap', 'close'];
 const EVENT_OUTCOMES = ['none', 'read', 'person', 'exhausted'];
+
+/* Which embed sent the event. An ALLOWLIST, not free text, because /event is
+   public and unauthenticated: without one, anyone could invent source values and
+   make the dashboard's demo/live split meaningless by filling it with noise.
+   Two values because there are two embeds. Add one here when a third exists -
+   it is deliberately a short list that has to be edited.
+
+   Absent -> '' (the sender declared none). Present but unknown -> 'invalid',
+   the same marker convention depth and outcome use: never invent, never drop,
+   keep the failure countable. A run of 'invalid' means an embed is misconfigured
+   and is a bug report, not a fact about guests. */
+const EVENT_SOURCES = ['demo', 'live'];
+const SOURCE_ABSENT = '';
+const SOURCE_INVALID = 'invalid';
 
 const MAX_ROUTE_LEN = 120;
 const MAX_QUESTION_ID_LEN = 64;
@@ -332,6 +360,13 @@ function toEventRow(body) {
   if (kind !== 'close' && (depthSent || outcomeSent)) return null;
   if (kind === 'open' && (questionId !== null || position !== null)) return null;
 
+  /* source is accepted on every kind - it describes the sender, not the event -
+     so it is not part of the per-kind FORBIDDEN rules above. */
+  const sourceSent = body.source !== undefined && body.source !== null;
+  const sourceRaw = shortString(body.source, 16);
+  const source = !sourceSent ? SOURCE_ABSENT
+    : (sourceRaw !== null && EVENT_SOURCES.indexOf(sourceRaw) !== -1 ? sourceRaw : SOURCE_INVALID);
+
   const now = new Date();
   const ts = now.toISOString();
 
@@ -340,6 +375,7 @@ function toEventRow(body) {
     day: ts.slice(0, 10),          // YYYY-MM-DD, UTC, same instant as ts
     kind,
     route,
+    source,
     question_id: questionId,
     position: kind === 'tap' ? position : null,
     depth: kind === 'close' ? depth : null,
@@ -359,11 +395,11 @@ async function writeEvent(db, row) {
   try {
     await db
       .prepare(
-        'INSERT INTO events (ts, day, kind, route, question_id, position, depth, outcome) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO events (ts, day, kind, route, question_id, position, depth, outcome, source) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .bind(row.ts, row.day, row.kind, row.route,
-            row.question_id, row.position, row.depth, row.outcome)
+            row.question_id, row.position, row.depth, row.outcome, row.source)
       .run();
     return true;
   } catch (err) {
@@ -376,18 +412,24 @@ async function writeEvent(db, row) {
 /* Nightly rollup: events -> daily_stats                               */
 /* ------------------------------------------------------------------ */
 
-/* DAYS THAT ARE OURS, NOT GUESTS'.
+/* DAYS THAT ARE OURS, NOT GUESTS'. CURRENTLY EMPTY, AND THAT IS CORRECT.
  *
- * 2026-09-16 is 21 rows from four scripted walks run by RTS while turning
- * counting on for the demo - a person handoff, an exhausted walk, a 'none'
- * close and a panel-X close. Rolling them up would make the first numbers the
- * dashboard ever shows a record of us clicking.
+ * This held '2026-09-16' while that day carried 21 scripted RTS walks. Those
+ * rows have been deleted and the day now holds only real click-through, so there
+ * is nothing to exclude.
  *
- * ADD ANY FUTURE TEST DAY HERE. This array is the one place the rollup knows
- * about test data; a date buried in a WHERE clause would be invisible to the
- * next person and would silently stop being complete the moment someone tested
- * again. It is also recorded in HANDOFF.md - keep the two in step. */
-const EXCLUDED_DAYS = ['2026-09-16'];
+ * THE MECHANISM STAYS, THE PRACTICE DOES NOT. Identifying test data by date
+ * failed twice inside 24 hours - once when scripted rows and real clicks landed
+ * on the same UTC day, once when "today" turned out to be the excluded day
+ * itself. A date cannot say which embed sent a row, so it was always a proxy,
+ * and the proxy breaks whenever two kinds of traffic share a calendar day.
+ * `source` on every row is the structural replacement: filter on source='live'
+ * and test traffic is gone regardless of when it happened.
+ *
+ * Keep this array for a day that has to be struck out wholesale - a backfill
+ * gone wrong, a load test, a day of corrupted rows. It is not the way to
+ * separate demo from live any more. */
+const EXCLUDED_DAYS = [];
 
 /* Every metric this job writes. daily_stats.metric is one of these, and the
  * dashboard should know no others.
@@ -422,40 +464,42 @@ const EXCLUDED_DAYS = ['2026-09-16'];
  * and every one also filters on kind, which is that index's second column.
  * Nothing here scans the table. */
 function rollupStatements(day) {
-  const ins = 'INSERT INTO daily_stats (day, route, question_id, metric, outcome, value) ';
+  const ins = 'INSERT INTO daily_stats (day, source, route, question_id, metric, outcome, value) ';
   return [
     ['DELETE FROM daily_stats WHERE day = ?', [day]],
 
-    [ins + "SELECT day, route, '', 'opens', '', COUNT(*) FROM events " +
-      "WHERE day = ? AND kind = 'open' GROUP BY day, route", [day]],
+    /* source is grouped, never filtered: one pass writes every embed's rows for
+       the day, and the six-column key keeps demo and live in separate rows. */
+    [ins + "SELECT day, source, route, '', 'opens', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'open' GROUP BY day, source, route", [day]],
 
-    [ins + "SELECT day, route, '', 'closes', '', COUNT(*) FROM events " +
-      "WHERE day = ? AND kind = 'close' GROUP BY day, route", [day]],
+    [ins + "SELECT day, source, route, '', 'closes', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'close' GROUP BY day, source, route", [day]],
 
     /* question_id is NOT NULL on a tap by contract, but the guard costs nothing
        and a NULL here would violate daily_stats' NOT NULL and fail the batch. */
-    [ins + "SELECT day, route, question_id, 'taps', '', COUNT(*) FROM events " +
+    [ins + "SELECT day, source, route, question_id, 'taps', '', COUNT(*) FROM events " +
       "WHERE day = ? AND kind = 'tap' AND question_id IS NOT NULL " +
-      "GROUP BY day, route, question_id", [day]],
+      "GROUP BY day, source, route, question_id", [day]],
 
-    [ins + "SELECT day, route, question_id, 'first_taps', '', COUNT(*) FROM events " +
+    [ins + "SELECT day, source, route, question_id, 'first_taps', '', COUNT(*) FROM events " +
       "WHERE day = ? AND kind = 'tap' AND question_id IS NOT NULL AND position = 1 " +
-      "GROUP BY day, route, question_id", [day]],
+      "GROUP BY day, source, route, question_id", [day]],
 
-    [ins + "SELECT day, route, question_id, 'later_taps', '', COUNT(*) FROM events " +
+    [ins + "SELECT day, source, route, question_id, 'later_taps', '', COUNT(*) FROM events " +
       "WHERE day = ? AND kind = 'tap' AND question_id IS NOT NULL AND position >= 2 " +
-      "GROUP BY day, route, question_id", [day]],
+      "GROUP BY day, source, route, question_id", [day]],
 
     /* COALESCE, not a filter: a close that reported no outcome is still a close
        and belongs in this breakdown as '' - the schema's "'' means absent". */
-    [ins + "SELECT day, route, '', 'outcomes', COALESCE(outcome, ''), COUNT(*) FROM events " +
-      "WHERE day = ? AND kind = 'close' GROUP BY day, route, COALESCE(outcome, '')", [day]],
+    [ins + "SELECT day, source, route, '', 'outcomes', COALESCE(outcome, ''), COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'close' GROUP BY day, source, route, COALESCE(outcome, '')", [day]],
 
-    [ins + "SELECT day, route, '', 'invalid_depth', '', COUNT(*) FROM events " +
-      "WHERE day = ? AND kind = 'close' AND depth = -1 GROUP BY day, route", [day]],
+    [ins + "SELECT day, source, route, '', 'invalid_depth', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'close' AND depth = -1 GROUP BY day, source, route", [day]],
 
-    [ins + "SELECT day, route, '', 'invalid_outcome', '', COUNT(*) FROM events " +
-      "WHERE day = ? AND kind = 'close' AND outcome = 'invalid' GROUP BY day, route", [day]]
+    [ins + "SELECT day, source, route, '', 'invalid_outcome', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'close' AND outcome = 'invalid' GROUP BY day, source, route", [day]]
   ];
 }
 
@@ -742,16 +786,34 @@ async function handleStats(request, env) {
     return statsError(request, 500, 'no database binding');
   }
 
+  /* Optional ?source= filter. Validated against the same allowlist the ingest
+     uses, plus the two stored-only values, so a typo returns a 400 instead of an
+     empty chart that looks like "no traffic".
+
+     DEFAULT IS ALL SOURCES, not 'live'. Two reasons: filtering by default would
+     bake one policy into the transport, the same argument as returning flat
+     rows; and today the only traffic IS demo, so defaulting to live would hand
+     the dashboard an empty payload and no clue why. Every row carries its
+     source and the envelope reports the breakdown, so a dashboard cannot mix
+     demo and live without having been told they are both there. */
+  const source = url.searchParams.get('source');
+  if (source !== null &&
+      EVENT_SOURCES.indexOf(source) === -1 &&
+      source !== SOURCE_ABSENT && source !== SOURCE_INVALID) {
+    return statsError(request, 400,
+      'unknown source; expected one of ' + EVENT_SOURCES.join(', '));
+  }
+
   let rows;
   try {
-    const result = await env.USAGE_DB
-      .prepare(
-        'SELECT day, route, question_id, metric, outcome, value FROM daily_stats ' +
-        'WHERE day >= ? AND day <= ? ' +
-        'ORDER BY day, route, metric, question_id, outcome'
-      )
-      .bind(from, to)
-      .all();
+    const sql = 'SELECT day, source, route, question_id, metric, outcome, value ' +
+      'FROM daily_stats WHERE day >= ? AND day <= ?' +
+      (source === null ? '' : ' AND source = ?') +
+      ' ORDER BY day, source, route, metric, question_id, outcome';
+    const stmt = source === null
+      ? env.USAGE_DB.prepare(sql).bind(from, to)
+      : env.USAGE_DB.prepare(sql).bind(from, to, source);
+    const result = await stmt.all();
     rows = result.results || [];
   } catch (err) {
     console.log('stats read failed:', err && err.name ? err.name : 'error');
@@ -769,15 +831,22 @@ async function handleStats(request, env) {
      widget, and the one thing worse than not charting them is not noticing
      them. Zero here means no marker rows in range, which is the healthy case. */
   let invalidDepth = 0, invalidOutcome = 0;
+  const sources = {};
   for (const r of rows) {
     if (r.metric === 'invalid_depth') invalidDepth += r.value;
     if (r.metric === 'invalid_outcome') invalidOutcome += r.value;
+    sources[r.source] = (sources[r.source] || 0) + 1;
   }
 
   return new Response(JSON.stringify({
     from: from,
     to: to,
     days: span,
+    source: source === null ? 'all' : source,
+    /* Which sources are actually present, and how many rows each contributed.
+       Same principle as alarms: a dashboard should not be able to mix demo and
+       live traffic without the payload having said so. */
+    sources: sources,
     row_count: rows.length,
     alarms: { invalid_depth: invalidDepth, invalid_outcome: invalidOutcome },
     rows: rows

@@ -56,6 +56,17 @@
      survives the pageview - a written commitment to Grace, not a preference. */
   var EVENTS_URL = script.getAttribute('data-events') || '';
 
+  /* Which embed this is: 'demo' or 'live'. Sent with every event so demo traffic
+     and real guest traffic can be told apart in the database - which replaces
+     identifying test data by DATE, a proxy that failed twice in 24 hours because
+     a date cannot say which embed sent a row.
+
+     The endpoint validates this against its own allowlist, so a typo here does
+     not become a new category: it is stored as 'invalid', which is countable and
+     shows up as a misconfigured embed rather than quietly splitting the data.
+     Absent is legitimate and stored as '' - an embed that does not say. */
+  var EVENT_SOURCE = script.getAttribute('data-source') || '';
+
   var EVENT_MAX_POSITION = 100;   // contract: position is integer 1..100
   var EVENT_MAX_DEPTH = 100;      // contract: depth is integer 0..100
 
@@ -76,6 +87,10 @@
     if (!EVENTS_URL) return;
     var body;
     try {
+      /* Added here rather than at each of the three call sites: source describes
+         the SENDER, not the event, so it is the same on every kind and there is
+         no per-kind rule for it to get wrong. One place to set, one to change. */
+      if (EVENT_SOURCE) payload.source = EVENT_SOURCE;
       body = JSON.stringify(payload);
     } catch (err) {
       return;

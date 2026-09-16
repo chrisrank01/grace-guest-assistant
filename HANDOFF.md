@@ -141,29 +141,46 @@ alongside their existing attributes. **The live site does not** — no embed on
 discovergrace.com carries the attribute, so nothing there is counted. The two
 switches are independent by design.
 
-**EVERY ROW IN `events` DATED 2026-09-16 IS RTS TEST DATA, NOT GUEST BEHAVIOUR.**
-Twenty-one rows from four scripted walks. Exclude them from any rollup or report:
+**TELLING TEST FROM REAL: use `source`, never the date.**
+
+Every event records which embed sent it — `demo` or `live`, `''` if the sender
+declared none, `'invalid'` if it sent something unknown. The demo embed carries
+`data-source="demo"`; the live embed will carry `data-source="live"` when it is
+switched on. So:
 
 ```sql
--- real guest behaviour only
-WHERE NOT (ts >= '2026-09-16T00:00:00Z' AND ts < '2026-09-17T00:00:00Z')
+WHERE source = 'live'     -- real guest behaviour, whenever it happened
 ```
 
-Verified at the time: that predicate matched 21 of 21 rows, leaving 0. It is
-dated rather than flagged because the schema has no column to flag with, and
-adding one would mean a column that exists only to describe rows we made — the
-date does the job and costs nothing.
+**The 21 scripted rows are gone** (deleted 2026-09-16) and `EXCLUDED_DAYS` is now
+empty. It stays as a mechanism for striking out a whole day — a bad backfill, a
+load test — but it is no longer how demo and live are separated.
 
-**If you test again, note the date here**, or the exclusion silently stops being
-complete. That is the failure mode of a date-based marker and it is the price of
-not adding a column.
+**Why this changed.** Identifying test data by date failed twice inside 24 hours:
+once when scripted walks and real demo clicks landed on the same UTC day, and
+once when "today" turned out to *be* the excluded day. A date cannot say which
+embed sent a row, so it was only ever a proxy, and a proxy that breaks whenever
+two kinds of traffic share a calendar day. That was the stated trigger condition
+for making it structural, and it was met.
 
-**Distinguishing test from guest, generally:** demo traffic is the only traffic
-until the attribute is added to the live embed, so before that day every row is
-ours. Afterwards, demo and live rows are indistinguishable in the table — they
-carry the same routes and no origin is recorded. If they ever need telling apart
-for real, that is a reason to add a `source` column, and it should be discussed
-before it is done.
+**The 44 rows that predate the column were backfilled to `demo`** on 2026-09-16.
+That is not a guess: `data-events` has only ever existed on the two demo pages.
+The cost, recorded honestly — a row that *declared* `demo` and one that was
+*assigned* it are now indistinguishable.
+
+**CLOSES ARE NOT VISITS — do not compute a per-visit average from them.**
+One pageview can produce several `close` rows. The widget's counters are scoped
+to the pageview and deliberately do not reset when the panel is closed and
+reopened, because `position` means "the Nth thing tapped in this pageview". A
+guest who taps twice, closes the panel, reopens it and closes again produces two
+closes, the second repeating the cumulative `depth=2` with no new taps. Seen in
+real traffic (2026-09-16, rows 77–78). So `SUM(depth)` over closes double-counts
+and `AVG(depth)` is meaningless; `closes` and `outcomes` stay honest as "moments
+a guest stopped". There is no identifier linking rows, by design, so this cannot
+be corrected after the fact. **The fix, not implemented:** have the widget send
+depth *since the last close* rather than cumulative, making closes additive —
+a behaviour change to a shipped contract, so it needs its own pass and a way to
+tell the two eras apart.
 
 **THE ROUTER IS NOW A FETCH *AND* SCHEDULED WORKER.** As of 2026-09-16 it
 carries `[triggers] crons = ["25 3 * * *"]` and a `scheduled()` handler that
