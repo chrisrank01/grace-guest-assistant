@@ -47,7 +47,15 @@ const ALLOWED_ORIGINS = [
   'https://www.discovergrace.com',
   'https://grace-assistant.pages.dev',
   'https://assistant.discovergrace.ai',
-  'https://grace-demo.pages.dev'
+  'https://grace-demo.pages.dev',
+  /* The usage dashboard, added 2026-09-16. Two entries because a Pages project
+     always answers on its own pages.dev name as well as its custom domain, and
+     the dashboard will be reached on the pages.dev one until the DNS record for
+     widget.discovergrace.ai exists. Same pattern as grace-assistant above.
+     These are the ONLY additions - /stats reads nothing a guest can see, but it
+     is still gated by the same one list as everything else. */
+  'https://widget.discovergrace.ai',
+  'https://grace-widget-dashboard.pages.dev'
 ];
 
 /**
@@ -58,7 +66,7 @@ const ALLOWED_ORIGINS = [
  */
 function corsHeaders(request) {
   const headers = {
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin'
@@ -649,6 +657,140 @@ async function handleEvent(request, env) {
   return ok();
 }
 
+/* ------------------------------------------------------------------ */
+/* GET /stats - the dashboard's reader                                  */
+/* ------------------------------------------------------------------ */
+
+/* Never more than this in one request. 400 days is a year plus slack for a
+   year-on-year comparison; past that a single crafted request starts walking
+   the whole table, which is the exact cost daily_stats exists to avoid. */
+const STATS_MAX_DAYS = 400;
+const STATS_DEFAULT_DAYS = 30;
+
+function isDay(v) {
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) &&
+         !isNaN(Date.parse(v + 'T00:00:00Z'));
+}
+
+function daysBetween(from, to) {
+  return Math.round(
+    (Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000
+  ) + 1;
+}
+
+function statsError(request, status, message) {
+  return new Response(JSON.stringify({ error: message }), {
+    status: status,
+    headers: {
+      ...corsHeaders(request),
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store'
+    }
+  });
+}
+
+/**
+ * GET /stats?from=YYYY-MM-DD&to=YYYY-MM-DD
+ *
+ * READS daily_stats ONLY. Never events - see the comment on the events table in
+ * worker/schema.sql: an aggregate over raw events reads every row it scans, and
+ * a dashboard refreshing against a full table would burn the daily read budget
+ * and stop D1 answering queries at all. This endpoint is the reason that table
+ * exists; it must not be the thing that defeats it.
+ *
+ * UNLIKE /event, THIS ONE REPORTS FAILURE. A telemetry write that vanishes costs
+ * a row nobody misses; a dashboard that spins forever because the fetch failed
+ * silently costs someone an afternoon. 400 for a bad request, 500 for a read
+ * that failed, both as JSON with an `error` string and both carrying CORS
+ * headers so the browser can actually read them.
+ */
+async function handleStats(request, env) {
+  if (request.method !== 'GET') {
+    return statsError(request, 405, 'GET only');
+  }
+  if (!originAllowed(request)) {
+    /* Deliberately terse and deliberately a real status: a browser on an
+       unlisted origin could not read the body anyway, and saying more would
+       only help someone probing. */
+    return statsError(request, 403, 'origin not allowed');
+  }
+
+  let url;
+  try {
+    url = new URL(request.url);
+  } catch (err) {
+    return statsError(request, 400, 'bad url');
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const to = url.searchParams.get('to') || today;
+  const from = url.searchParams.get('from') ||
+    utcDay(new Date(Date.parse(to + 'T00:00:00Z')), STATS_DEFAULT_DAYS - 1);
+
+  if (!isDay(from) || !isDay(to)) {
+    return statsError(request, 400, 'from and to must be YYYY-MM-DD');
+  }
+  if (from > to) {
+    return statsError(request, 400, 'from must not be after to');
+  }
+  const span = daysBetween(from, to);
+  if (span > STATS_MAX_DAYS) {
+    return statsError(request, 400,
+      'range is ' + span + ' days; the maximum is ' + STATS_MAX_DAYS);
+  }
+  if (!env || !env.USAGE_DB) {
+    return statsError(request, 500, 'no database binding');
+  }
+
+  let rows;
+  try {
+    const result = await env.USAGE_DB
+      .prepare(
+        'SELECT day, route, question_id, metric, outcome, value FROM daily_stats ' +
+        'WHERE day >= ? AND day <= ? ' +
+        'ORDER BY day, route, metric, question_id, outcome'
+      )
+      .bind(from, to)
+      .all();
+    rows = result.results || [];
+  } catch (err) {
+    console.log('stats read failed:', err && err.name ? err.name : 'error');
+    return statsError(request, 500, 'could not read usage data');
+  }
+
+  /* SHAPE: flat rows plus a thin envelope.
+     Flat because it is exactly what the table holds - no reshaping to argue
+     with, and a chart can group by whatever axis it wants in one pass. Nesting
+     would bake one chart's idea of the hierarchy into the transport.
+
+     `alarms` is a summary, NOT a fold: invalid_depth and invalid_outcome are
+     still present in rows as their own metrics, untouched. The summary exists
+     so a dashboard cannot quietly omit them - they are a bug report about the
+     widget, and the one thing worse than not charting them is not noticing
+     them. Zero here means no marker rows in range, which is the healthy case. */
+  let invalidDepth = 0, invalidOutcome = 0;
+  for (const r of rows) {
+    if (r.metric === 'invalid_depth') invalidDepth += r.value;
+    if (r.metric === 'invalid_outcome') invalidOutcome += r.value;
+  }
+
+  return new Response(JSON.stringify({
+    from: from,
+    to: to,
+    days: span,
+    row_count: rows.length,
+    alarms: { invalid_depth: invalidDepth, invalid_outcome: invalidOutcome },
+    rows: rows
+  }), {
+    status: 200,
+    headers: {
+      ...corsHeaders(request),
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store'
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -656,20 +798,26 @@ export default {
         return new Response(null, { status: 204, headers: corsHeaders(request) });
       }
 
-      // Anything that is not a POST still gets the fallback contract, not an error.
-      if (request.method !== 'POST') {
-        return empty(request);
-      }
-
-      // Split on pathname. Everything that is not /event falls through to the
-      // ranking endpoint below, so the bare path the widget has always posted to
-      // behaves exactly as it did before this endpoint existed.
+      // Split on pathname first. /stats is a GET, so it has to be routed before
+      // the POST-only gate below; everything else is unchanged.
       let pathname = '/';
       try {
         pathname = new URL(request.url).pathname;
       } catch (err) {
         pathname = '/';
       }
+      if (pathname === '/stats' || pathname === '/stats/') {
+        return await handleStats(request, env);
+      }
+
+      // Anything that is not a POST still gets the fallback contract, not an error.
+      if (request.method !== 'POST') {
+        return empty(request);
+      }
+
+      // Everything that is not /event falls through to the ranking endpoint
+      // below, so the bare path the widget has always posted to behaves exactly
+      // as it did before these endpoints existed.
       if (pathname === '/event' || pathname === '/event/') {
         return await handleEvent(request, env);
       }
