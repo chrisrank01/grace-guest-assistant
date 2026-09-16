@@ -193,6 +193,29 @@ note above about test rows — the two must stay in step, or the dashboard start
 reporting us. Verified: an excluded day issues zero SQL statements, not merely
 zero writes.
 
+**UNPROVEN UNTIL 2026-09-17 03:25 UTC — worth one glance.** The exclusion gate
+was proven by calling `rollupDay()` directly with the excluded day, but the cron
+rolls *yesterday*, so the scheduled path does not actually meet `2026-09-16`
+until its first run on the 17th. Check the Worker's logs after that run and
+confirm it logged `status=skipped-test-day` rather than assuming it did:
+
+```
+npx wrangler tail grace-assistant-router
+```
+
+A line reading `rollup {"day":"2026-09-16","status":"ok",...}` with rows written
+would mean the exclusion did not fire, and `daily_stats` would then be holding
+RTS clicks. Clear it with `DELETE FROM daily_stats WHERE day = '2026-09-16';`
+and find out why before anything reads the table.
+
+**Two records of one fact, kept in step by hand.** `EXCLUDED_DAYS` and the
+test-row note above both record which days are ours. Nothing enforces that they
+agree. That is tolerable while testing is occasional; **if RTS testing becomes
+routine, that is the trigger to add a `source` column to `events`** and stop
+identifying test data by date at all. Doing it now would mean a column that
+exists only to describe rows we made — doing it then would mean a column that
+earns its place. The decision point is frequency, not preference.
+
 **Since 2026-08-27 the visible re-render is disabled** — chips reordering ~2s after
 a tap caused misclicks. The POST still happens as telemetry (`console.debug`,
 Chrome Verbose only). Re-enabling means designing a render-once flow first.
