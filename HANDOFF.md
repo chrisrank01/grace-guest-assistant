@@ -165,12 +165,33 @@ carry the same routes and no origin is recorded. If they ever need telling apart
 for real, that is a reason to add a `source` column, and it should be discussed
 before it is done.
 
-**PLANNED, NOT YET BUILT:** a nightly cron on this same Worker to roll `events`
-up into `daily_stats`. When that lands the router becomes a **fetch _and_
-scheduled** Worker — one Worker owning both, deliberately, because two Workers
-would be two deploys, two log surfaces and one more thing to explain at handoff.
-It has no `scheduled` handler and no `[triggers]` block today; if you are looking
-for the cron and cannot find it, this is why.
+**THE ROUTER IS NOW A FETCH *AND* SCHEDULED WORKER.** As of 2026-09-16 it
+carries `[triggers] crons = ["25 3 * * *"]` and a `scheduled()` handler that
+rolls the **previous** UTC day's `events` into `daily_stats`. One Worker owns
+both deliberately: two Workers would be two deploys, two log surfaces and one
+more thing to explain at handoff.
+
+03:25 UTC is after the day being rolled has closed, and clear of the
+content-publish cron at :17 past every second hour.
+
+**The rollup is idempotent and safe to re-run** — it DELETEs the day and rebuilds
+it inside one atomic `db.batch()`, so a re-run is a no-op and a day whose events
+were corrected loses its stale figures. Proven by running one day four times for
+an identical fingerprint, and by deleting an event and confirming no stale row
+survived.
+
+**Re-running a day by hand.** There is deliberately **no HTTP endpoint** for it:
+the rollup is pure SQL, and an endpoint would add public unauthenticated attack
+surface to do what `wrangler` already does with the operator's own credentials.
+The statements are `rollupStatements(day)` in `worker/src/index.js`. In practice
+the job is idempotent and runs nightly, so the usual answer to a failed night is
+to wait for the next one.
+
+**Test days are skipped by name.** `EXCLUDED_DAYS` in `worker/src/index.js`
+currently holds `2026-09-16`. **Any future RTS test day goes there**, and in the
+note above about test rows — the two must stay in step, or the dashboard starts
+reporting us. Verified: an excluded day issues zero SQL statements, not merely
+zero writes.
 
 **Since 2026-08-27 the visible re-render is disabled** — chips reordering ~2s after
 a tap caused misclicks. The POST still happens as telemetry (`console.debug`,

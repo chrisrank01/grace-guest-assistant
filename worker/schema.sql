@@ -143,12 +143,41 @@ CREATE TABLE IF NOT EXISTS daily_stats (
   day         TEXT    NOT NULL,
   route       TEXT    NOT NULL,
   question_id TEXT    NOT NULL DEFAULT '',   -- '' = metric is not per-question
-  metric      TEXT    NOT NULL,              -- 'taps'|'first_taps'|'later_taps'|'opens'|'closes'
+  metric      TEXT    NOT NULL,              -- see the full list below
+                                             -- 'opens'|'closes'|'taps'|'first_taps'
+                                             -- |'later_taps'|'outcomes'
+                                             -- |'invalid_depth'|'invalid_outcome'
   outcome     TEXT    NOT NULL DEFAULT '',   -- '' = metric is not per-outcome
   value       INTEGER NOT NULL,
   PRIMARY KEY (day, route, question_id, metric, outcome)
 );
 
+-- THE METRICS, and what each row means. Written by the nightly rollup in
+-- worker/src/index.js; the dashboard should know no others.
+--   opens / closes    per route. question_id='' outcome=''
+--   taps              per route per question. question_id=<slug> outcome=''
+--   first_taps        as taps, but position=1 only
+--   later_taps        as taps, but position>=2 only
+--                     first_taps + later_taps = taps, per question. That pair is
+--                     what answers "how many people asked more than one
+--                     question" with no identifier linking any two rows.
+--   outcomes          per route per outcome. question_id='' outcome=<value>.
+--                     outcome='' here means a close that reported none, which is
+--                     NOT the same as outcome='none' (guest tapped nothing).
+--   invalid_depth     per route. BUG REPORTS, NOT BEHAVIOUR - see the marker
+--   invalid_outcome   note above. 'invalid' also appears under outcomes on
+--                     purpose: that view stays honest about what is in the
+--                     table, these two are the alarm.
+--
+-- A metric with a count of zero produces NO ROW rather than a row of 0. Absence
+-- is zero. That matters most for the two invalid_* metrics: a row appearing at
+-- all is the signal.
+--
+-- The rollup DELETEs the day before inserting it, inside one atomic db.batch().
+-- That is stronger than upsert alone, which cannot remove a row whose underlying
+-- events have gone - re-rolling a corrected day would leave the stale figure
+-- behind forever. Verified: deleting an event and re-rolling leaves 0 stale rows.
+--
 -- The PK's leading column is day, so a date range across all routes is already
 -- covered. This serves the other axis - one route over time, which is how the
 -- dashboard is most likely to be sliced.

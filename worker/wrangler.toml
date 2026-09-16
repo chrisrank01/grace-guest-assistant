@@ -14,3 +14,14 @@ compatibility_date = "2025-01-01"
 binding = "USAGE_DB"
 database_name = "grace-widget-usage"
 database_id = "f0d62985-5c9f-4811-8843-2d8fce7b3e07"
+
+# Nightly rollup: events -> daily_stats for the PREVIOUS UTC day.
+#
+# 03:25 UTC is chosen so the day being rolled is closed and cannot gain more
+# rows, and so it does not land on the content-publish cron, which fires at :17
+# past every second hour (02:17, 04:17). The two jobs share nothing, but two jobs
+# that never overlap are easier to read in a log than two that sometimes do.
+#
+# This makes grace-assistant-router a fetch AND scheduled Worker. See HANDOFF.md.
+[triggers]
+crons = ["25 3 * * *"]

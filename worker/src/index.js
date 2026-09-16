@@ -364,6 +364,128 @@ async function writeEvent(db, row) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Nightly rollup: events -> daily_stats                               */
+/* ------------------------------------------------------------------ */
+
+/* DAYS THAT ARE OURS, NOT GUESTS'.
+ *
+ * 2026-09-16 is 21 rows from four scripted walks run by RTS while turning
+ * counting on for the demo - a person handoff, an exhausted walk, a 'none'
+ * close and a panel-X close. Rolling them up would make the first numbers the
+ * dashboard ever shows a record of us clicking.
+ *
+ * ADD ANY FUTURE TEST DAY HERE. This array is the one place the rollup knows
+ * about test data; a date buried in a WHERE clause would be invisible to the
+ * next person and would silently stop being complete the moment someone tested
+ * again. It is also recorded in HANDOFF.md - keep the two in step. */
+const EXCLUDED_DAYS = ['2026-09-16'];
+
+/* Every metric this job writes. daily_stats.metric is one of these, and the
+ * dashboard should know no others.
+ *
+ *   opens / closes        per route
+ *   taps / first_taps /   per route per question. first_taps is position=1,
+ *   later_taps            later_taps is position>=2 - the pair is what answers
+ *                         "how many people asked more than one question"
+ *                         without any identifier linking rows together.
+ *   outcomes              per route per outcome value, including '' for a close
+ *                         that reported none. NOT the same as outcome 'none',
+ *                         which means the guest tapped nothing.
+ *   invalid_depth /       per route. THESE ARE BUG REPORTS, NOT BEHAVIOUR. See
+ *   invalid_outcome       the marker note in schema.sql. A rising count means
+ *                         the widget is sending values the contract forbids.
+ *                         'invalid' also appears under outcomes, deliberately:
+ *                         that view stays honest about what is in the table,
+ *                         and this one is the alarm. */
+
+/* The day's statements, in order. Parameterised on day - never interpolated.
+ *
+ * DELETE-then-INSERT rather than upsert alone, which is a deliberate departure
+ * from the note in schema.sql and is strictly stronger. Upsert makes a re-run
+ * idempotent only for rows that still exist: if a question stops appearing for
+ * that day (events corrected, a bad row removed), its stale daily_stats row
+ * survives the re-run with its old value and nothing ever clears it. Clearing
+ * the day first makes the rollup a true projection of events-as-they-are-now.
+ * Both statements run in one db.batch(), which D1 executes atomically, so there
+ * is no window where the day is deleted but not yet rebuilt.
+ *
+ * Every SELECT is filtered to a single day, which idx_events_day_kind serves,
+ * and every one also filters on kind, which is that index's second column.
+ * Nothing here scans the table. */
+function rollupStatements(day) {
+  const ins = 'INSERT INTO daily_stats (day, route, question_id, metric, outcome, value) ';
+  return [
+    ['DELETE FROM daily_stats WHERE day = ?', [day]],
+
+    [ins + "SELECT day, route, '', 'opens', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'open' GROUP BY day, route", [day]],
+
+    [ins + "SELECT day, route, '', 'closes', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'close' GROUP BY day, route", [day]],
+
+    /* question_id is NOT NULL on a tap by contract, but the guard costs nothing
+       and a NULL here would violate daily_stats' NOT NULL and fail the batch. */
+    [ins + "SELECT day, route, question_id, 'taps', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'tap' AND question_id IS NOT NULL " +
+      "GROUP BY day, route, question_id", [day]],
+
+    [ins + "SELECT day, route, question_id, 'first_taps', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'tap' AND question_id IS NOT NULL AND position = 1 " +
+      "GROUP BY day, route, question_id", [day]],
+
+    [ins + "SELECT day, route, question_id, 'later_taps', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'tap' AND question_id IS NOT NULL AND position >= 2 " +
+      "GROUP BY day, route, question_id", [day]],
+
+    /* COALESCE, not a filter: a close that reported no outcome is still a close
+       and belongs in this breakdown as '' - the schema's "'' means absent". */
+    [ins + "SELECT day, route, '', 'outcomes', COALESCE(outcome, ''), COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'close' GROUP BY day, route, COALESCE(outcome, '')", [day]],
+
+    [ins + "SELECT day, route, '', 'invalid_depth', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'close' AND depth = -1 GROUP BY day, route", [day]],
+
+    [ins + "SELECT day, route, '', 'invalid_outcome', '', COUNT(*) FROM events " +
+      "WHERE day = ? AND kind = 'close' AND outcome = 'invalid' GROUP BY day, route", [day]]
+  ];
+}
+
+/* YYYY-MM-DD for the UTC day N days before the given instant. */
+function utcDay(date, back) {
+  const d = new Date(date.getTime() - (back || 0) * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Roll one day. Returns a short result object for the log; never throws, because
+ * an unhandled throw in a scheduled handler is a silent red mark nobody is
+ * watching, and the next night's run would fix it anyway.
+ */
+async function rollupDay(db, day) {
+  if (EXCLUDED_DAYS.indexOf(day) !== -1) {
+    return { day: day, status: 'skipped-test-day' };
+  }
+  if (!db) return { day: day, status: 'no-binding' };
+  try {
+    const statements = rollupStatements(day).map(function (pair) {
+      const stmt = db.prepare(pair[0]);
+      return stmt.bind.apply(stmt, pair[1]);
+    });
+    const results = await db.batch(statements);
+    let read = 0, written = 0;
+    for (const r of results) {
+      if (r && r.meta) {
+        read += r.meta.rows_read || 0;
+        written += r.meta.rows_written || 0;
+      }
+    }
+    return { day: day, status: 'ok', rows_read: read, rows_written: written };
+  } catch (err) {
+    return { day: day, status: 'failed', error: err && err.name ? err.name : 'error' };
+  }
+}
+
 /**
  * Server-side budget lock. Separate concern from CORS: the CORS headers decide
  * what a browser is allowed to READ, this decides whether we SPEND an API call
@@ -598,5 +720,31 @@ export default {
       console.log('router fallback:', err && err.name ? err.name : 'error');
       return empty(request);
     }
+  },
+
+  /**
+   * Nightly rollup. Cron is in wrangler.toml.
+   *
+   * Rolls YESTERDAY, not today: the job runs at 03:25 UTC so the previous UTC
+   * day is closed and cannot gain more rows. Rolling today would write a
+   * partial day that looks complete.
+   *
+   * MANUAL RE-RUN, for a night that failed or a day that gained late rows.
+   * There is no HTTP path for this on purpose - the rollup is pure SQL, so
+   * exposing an endpoint would add public, unauthenticated attack surface to do
+   * something wrangler already does with the operator's own credentials:
+   *
+   *   npx wrangler d1 execute grace-widget-usage --remote --command \
+   *     "DELETE FROM daily_stats WHERE day = '2026-09-20';"
+   *   # ...then the eight INSERTs from rollupStatements() with the day substituted.
+   *
+   * Simpler in practice: temporarily change the cron, or wait a night - the job
+   * is idempotent, so re-rolling a day is always safe.
+   */
+  async scheduled(event, env, ctx) {
+    const now = new Date(event && event.scheduledTime ? event.scheduledTime : Date.now());
+    const day = utcDay(now, 1);
+    const result = await rollupDay(env && env.USAGE_DB, day);
+    console.log('rollup ' + JSON.stringify(result));
   }
 };
