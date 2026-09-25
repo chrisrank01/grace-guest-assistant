@@ -111,7 +111,11 @@ h2{font-family:var(--display);font-weight:500;font-size:22px;color:var(--navy);m
 .act.mv{background:rgba(3,174,175,.14);color:#2F7F7E}
 .act.rw{background:rgba(255,85,0,.11);color:#B03A00}
 .act.nv{background:rgba(40,46,57,.07);color:var(--ink-mute)}
-.key{font-size:12px;color:var(--ink-mute);margin:0 0 12px;line-height:1.6;max-width:72ch}
+.key{font-size:12px;color:var(--ink-mute);margin:0 0 12px;line-height:1.6;max-width:74ch}
+.explain{background:var(--white);border:1px solid var(--card-border);border-radius:4px;
+  box-shadow:var(--shadow);padding:15px 17px;margin-top:24px;font-size:13px;
+  color:var(--ink-sec);line-height:1.55;max-width:74ch}
+.explain b{color:var(--navy)}
 .key b{color:var(--navy);font-weight:600}
 .also .pl{font-size:12px;color:var(--ink-mute)}
 .also .n{text-align:right;font-family:var(--display);font-size:17px;color:var(--navy)}
@@ -257,8 +261,8 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--hair);
 <script>
 /* ===================================================================
    Grace Guest Assistant — usage dashboard
-   Design approved 2026-09-15 (grace-dashboard-APPROVED.html, md5
-   21cc87ca1377b42689014315e271fdd7). This file reproduces it and
+   Design approved 2026-09-15, revised 2026-09-25 (grace-dashboard-APPROVED.html,
+   md5 6db75f72372ce2a71408efbe2947b62d). This file reproduces it and
    replaces every hardcoded number with live data. Layout, type,
    colour and copy are the approved design; only the numbers moved.
    =================================================================== */
@@ -397,7 +401,7 @@ function build(stats, answers) {
   /* ---- THE THREE ACTIONS. The action follows from the diagnosis, and the
      asymmetry is deliberate: the same zero means opposite things depending
      on whether the guest was ever offered the question.
-       on the list  + below the line -> Rewrite       (everyone saw it, nobody opened it)
+       on the list  + below the line -> Not landing   (everyone saw it, nobody opened it)
        off the list + at or above    -> Move up       (they had to hunt, and did)
        off the list + below the line -> No verdict yet (too rarely shown to judge)
        on the list  + at or above    -> working                                   */
@@ -429,19 +433,29 @@ function build(stats, answers) {
 /* ---- rendering: the verdict panel -------------------------------- */
 var ACT = {
   moveup:    { cls: 'mv', label: 'Move up' },
-  rewrite:   { cls: 'rw', label: 'Rewrite' },
+  rewrite:   { cls: 'rw', label: 'Not landing' },
   noverdict: { cls: 'nv', label: 'No verdict yet' }
 };
 
 /* The plain-language statement of the thresholds. A reader should not have to
    ask what "few taps" means, so the page says it. */
 function thresholdKey() {
-  return '<p class="key"><b>Move up</b> — people want it and have to hunt for it. ' +
-    '<b>Rewrite</b> — everyone is offered it and almost nobody opens it. ' +
-    '<b>No verdict yet</b> — too rarely shown to judge.<br>' +
+  return '<p class="key"><b>Move up</b> &mdash; not in the widget&rsquo;s opening list, and guests ' +
+    'tap through to find it anyway. <b>Not landing</b> &mdash; in the opening list, seen by ' +
+    'everyone, rarely opened. The numbers say that much; why is your call. <b>No verdict ' +
+    'yet</b> &mdash; too rarely shown to judge either way.<br>' +
     'A question counts as wanted when it draws <b>at least one tap in twenty</b> on its page. ' +
     'No page is judged at all until it has <b>' + VERDICT_MIN_TAPS + ' taps</b> — below that a ' +
     'single tap moves a question across the line, and the verdict would be noise.</p>';
+}
+
+/* Defines "the opening list" wherever the ledgers use the term. */
+function explainOpeningList() {
+  return '<div class="explain"><b>What &ldquo;the opening list&rdquo; means.</b> When a guest ' +
+    'opens the widget on a page, it shows 3 to 5 questions. Everything else is only reachable ' +
+    'after they tap one and see the suggestions underneath. That opening list is the ' +
+    '<b>Starter question IDs</b> cell on the PLACEMENT tab &mdash; and the order you type is ' +
+    'the order guests see.</div>';
 }
 
 function ledger(p) {
@@ -514,6 +528,7 @@ function renderVerdict(m) {
       }).join(', ') + '. Until then the numbers below are real but the ' +
       'conclusions would not be.</p></div>';
     m.pages.forEach(function (p) { h += ledger(p); });
+    h += explainOpeningList();
     h += '<div class="lbl" style="margin:26px 0 10px">What the verdicts will mean</div>' + thresholdKey();
     return h;
   }
@@ -550,14 +565,18 @@ function renderVerdict(m) {
       '<p class="where">' + esc(p.name) + ' · not on the opening list</p>' +
       '<p><b>' + plural(q.taps, 'tap') + ', ' + rank + ordinal(rank) + ' most tapped of the ' +
       all.length + ' — and it has never been offered first.</b> Every one of those taps came ' +
-      'from a guest tapping through to find it. <b>The wording is working.</b> Guests want this ' +
-      'answer badly enough to go looking for it, so it does not need rewriting — it needs offering.</p>';
+      'from a guest tapping through to find it. <b>Guests want this answer badly enough to go ' +
+      'looking for it.</b> It is not in the widget&rsquo;s opening list, so everyone who read it ' +
+      'had to tap another question first and find it underneath.</p>';
     if (full) {
       h += '<p class="trade"><b>' + esc(p.name) + ' already offers ' + p.capacity +
         ' questions, which is the most it can show.</b> Nothing can be added without something ' +
         'coming out. The candidate is <b>&ldquo;' + esc(cand.label) + '&rdquo;</b> — offered to ' +
         'every guest and tapped ' + plural(cand.taps, 'time') + '.' +
-        (cand.taps === 0 ? '' : ' That one <i>is</i> a wording problem: everyone sees it and almost nobody opens it.') +
+        (cand.act !== 'rewrite' || cand.taps === 0 ? '' : ' That one is not landing: every guest is ' +
+          'shown it and almost nobody opens it. Whether that is the wording, or simply a question ' +
+          'people do not have, is a judgement only you can make &mdash; but either way it is the ' +
+          'weakest thing occupying a slot.') +
         '</p>' + howTo(p, q, cand);
     } else {
       h += '<p class="trade"><b>' + esc(p.name) + ' offers ' + p.starters.length + ' of ' +
@@ -571,6 +590,7 @@ function renderVerdict(m) {
   var rest = all.filter(function (x) {
     return x.q.act && x.q.act !== 'ok' && !(movers.length && x.q === movers[0].q);
   }).sort(function (a, b) { return b.q.taps - a.q.taps; });
+  h += explainOpeningList();
   h += '<div class="lbl" style="margin:26px 0 10px">Also worth a look</div>' + thresholdKey();
   if (!rest.length) {
     h += '<div class="also"><div class="r"><div><div class="q">Nothing else needs attention.</div>' +
@@ -581,7 +601,7 @@ function renderVerdict(m) {
     rest.forEach(function (x) {
       var a = ACT[x.q.act];
       var why = x.q.act === 'rewrite'
-        ? 'Offered to every guest and almost never opened. The wording is not landing.'
+        ? 'Shown to every guest and almost never opened. Could be the wording, could be a question nobody has.'
         : x.q.act === 'moveup'
           ? 'Steady demand and never offered. ' + esc(x.p.name) +
             (x.p.starters.length >= x.p.capacity
@@ -594,6 +614,12 @@ function renderVerdict(m) {
     });
     h += '</div>';
   }
+  h += '<div class="note" style="margin-top:18px"><b>&ldquo;Not landing&rdquo; is a ' +
+    'question, not a diagnosis.</b> The numbers can tell you a question was shown to ' +
+    'everyone and rarely opened. They cannot tell you why, and there are at least three ' +
+    'reasons: the wording is not catching anyone&rsquo;s eye, guests simply do not have ' +
+    'that question, or the page around the widget already answers it. Only you can tell ' +
+    'which &mdash; and the fix is different for each.</div>';
   return h;
 }
 
@@ -625,7 +651,7 @@ function renderGrid(m) {
     });
     var note = resting ? 'Nothing yet'
       : (!p.judged ? 'Too early to judge'
-        : (flagged ? plural(flagged, 'to look at') : 'All working'));
+        : (flagged ? flagged + ' to look at' : 'All working'));
     b.innerHTML = '<div class="nm">' + esc(p.name) + '</div><div class="st">' +
       plural(p.questions.length, 'question') +
       (resting ? '' : ' &middot; ' + plural(p.questionTaps, 'tap')) + '</div>' +
@@ -650,14 +676,18 @@ function showPage(m, i) {
     plural(p.questionTaps, 'tap') + ' · ' + plural(p.opens, 'conversation') +
     (p.judged ? '' : ' · too early to judge');
   var max = Math.max.apply(null, p.questions.map(function (q) { return q.taps; }).concat([1]));
+  /* The least-tapped question on the opening list, as in the verdict panel. */
+  var weakest = p.questions.filter(function (q) { return q.onList; })
+    .sort(function (a, b) { return a.taps - b.taps; })[0];
   var h = '<tr><th>Question</th><th class="shown">Shown how</th><th>How taps arrived</th>' +
     '<th class="r">Taps</th><th class="r">Share</th></tr>';
   p.questions.forEach(function (q) {
     var pill = q.onList ? '<span class="pill p-slot">Opening list</span>'
                         : '<span class="pill p-more">Follow-up only</span>';
     var hint = '';
-    if (q.act === 'moveup') hint = 'Wording is working — every tap came from a guest hunting for it. Move it up.';
-    if (q.act === 'rewrite') hint = 'Offered to every guest and almost never opened. Rewrite it, or trade it out.';
+    if (q.act === 'moveup') hint = 'Guests tap through to find this one. Put it in the opening list.';
+    if (q.act === 'rewrite') hint = 'Shown to every guest. ' + plural(q.taps, 'tap') + '.' +
+      (q === weakest ? ' The weakest thing holding a slot.' : '');
     if (q.act === 'noverdict') hint = 'Only reachable as a follow-up — too rarely seen to judge.';
     h += '<tr><td class="q">' + esc(q.label) + (hint ? '<div class="hint">' + hint + '</div>' : '') +
       '</td><td class="shown">' + pill + '</td><td><span class="track"><i class="' +
